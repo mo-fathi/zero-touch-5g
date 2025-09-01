@@ -57,7 +57,7 @@ def admission_control(nsr):
     global current_time
     state = get_state()
     action = choose_action(state)
-
+    
     if action == 1:  # Attempt to accept
         total_cpu_core = sum(vnf["CPU"] for vnf in nsr["VNFs"] if vnf["is_core"])
         total_ram_core = sum(vnf["RAM"] for vnf in nsr["VNFs"] if vnf["is_core"])
@@ -111,6 +111,7 @@ current_time = 0
 print("AC Agent started at 11:13 PM CEST, August 30, 2025...")
 for message in consumer:
     nsr = message.value
+    print (nsr)
     admission_control(nsr)
 
     # Update time and manage slice expiration

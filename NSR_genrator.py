@@ -19,12 +19,6 @@ def generate_nsr():
     bw_required = random.uniform(10, 50)  # Bandwidth in MHz
     nsr = {
         "id": nsr_id,
-        "VNFs": [
-            {"CPU": random.uniform(5, 20), "RAM": random.uniform(10, 40), "is_core": True}
-            if random.random() < 0.5 else
-            {"CPU": random.uniform(5, 20), "RAM": random.uniform(10, 40), "is_core": False}
-            for _ in range(random.randint(1, 3))
-        ],
         "QoS": {
             "L_max_int": random.uniform(1, 10),
             "L_max_ext": random.uniform(1, 10),
@@ -34,7 +28,6 @@ def generate_nsr():
             "P_max_ext": random.uniform(0, 0.01)
         },
         "T0": random.uniform(10, 50),  # Lifespan in seconds
-        "BW": bw_required  # Bandwidth requirement
     }
     return nsr
 
