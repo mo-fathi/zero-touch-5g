@@ -37,5 +37,5 @@ while True:
     if random.random() < 0.3:  # 30% chance per second
         nsr = generate_nsr()
         producer.send(topic, nsr)
-        print(f"Sent NSR_{nsr['id']} to lambda topic at {time.strftime('%H:%M:%S CEST, %B %d, %Y')}, T0={nsr['T0']:.1f}s, BW={nsr['BW']:.1f}MHz")
+        print(f"Sent NSR_{nsr['id']} to lambda topic at {time.strftime('%H:%M:%S CEST, %B %d, %Y')}, T0={nsr['T0']:.1f}s")
     time.sleep(1)  # 1 second interval
