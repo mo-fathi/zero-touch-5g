@@ -20,14 +20,17 @@ def generate_nsr():
     nsr = {
         "id": nsr_id,
         "QoS": {
+            # Latency in mili second
             "L_max_int": random.uniform(1, 10),
             "L_max_ext": random.uniform(1, 10),
+            # Throughput in mbps
             "Phi_min_int": random.uniform(50, 200),
             "Phi_min_ext": random.uniform(50, 200),
+            # packet loss in persentage (0,1)
             "P_max_int": random.uniform(0, 0.01),
             "P_max_ext": random.uniform(0, 0.01)
         },
-        "T0": random.uniform(10, 50),  # Lifespan in seconds
+        "T0": random.uniform(10, 50),  # Lifespan in minutes
     }
     return nsr
 
