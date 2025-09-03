@@ -1,6 +1,7 @@
 import random
 import json
 import time
+import datetime
 from kafka import KafkaProducer
 
 # Kafka configuration
@@ -15,8 +16,7 @@ producer = KafkaProducer(
 
 # Generate a new NSR
 def generate_nsr():
-    nsr_id = random.randint(1, 1000)
-    bw_required = random.uniform(10, 50)  # Bandwidth in MHz
+    nsr_id = int(time.time())
     nsr = {
         "id": nsr_id,
         "QoS": {
@@ -30,12 +30,12 @@ def generate_nsr():
             "P_max_int": random.uniform(0, 0.01),
             "P_max_ext": random.uniform(0, 0.01)
         },
-        "T0": random.uniform(10, 50),  # Lifespan in minutes
+        "T0": random.randint(5, 15) * 60,  # Lifespan in minutes
     }
     return nsr
 
 # Continuous NSR generation
-print("NSR Generator started at 11:13 PM CEST, August 30, 2025...")
+print("NSR Generator started", datetime.datetime.now())
 while True:
     if random.random() < 0.3:  # 30% chance per second
         nsr = generate_nsr()

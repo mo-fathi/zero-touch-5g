@@ -9,8 +9,8 @@ BOOTSTRAP_SERVERS = ['localhost:9092']
 
 # Helm chart paths (adjust as needed)
 OAI_CORE_CHART_PATH = './charts/oai-5g-core/oai-5g-basic'  # Path to OAI core chart
-OAI_GNB_CHART_PATH = './charts/oai-gnb'  # Path to gNB chart
-OAI_UE_CHART_PATH = './charts/oai-ue'    # Path to UE chart
+OAI_GNB_CHART_PATH = './charts/oai-5g-ran/oai-gnb'  # Path to gNB chart
+OAI_UE_CHART_PATH = './charts/oai-5g-ran/oai-nr-ue'    # Path to UE chart
 
 def uninstall_nsr(namespace, nsr_id, t0_seconds):
     """Wait for T0 seconds and then uninstall Helm releases and delete namespace."""
@@ -37,10 +37,10 @@ def uninstall_nsr(namespace, nsr_id, t0_seconds):
         print(f"Error during uninstallation for NSR {nsr_id}: {e}")
 
 def deploy_nsr(nsr):
-    nsr_id = nsr.get('nsr_id', 'default')  # Extract nsr_id or use default
+    nsr_id = nsr.get('id', 'default')  # Extract nsr_id or use default
     namespace = f"nsr-{nsr_id}"
     # Get T0 from NSR (in seconds) or default to 3600s (1 hour)
-    t0_seconds = nsr.get('t0_seconds', 3600)
+    t0_seconds = nsr.get('T0', 3600)
 
     try:
         # Step 1: Create a new namespace

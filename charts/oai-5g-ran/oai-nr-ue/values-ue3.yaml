@@ -1,0 +1,73 @@
+# Configuration for UE3
+kubernetesDistribution: Vanilla
+
+nfimage:
+  repository: docker.technotales.ir/oaisoftwarealliance/oai-nr-ue
+  version: 2024.w32
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: "oai-nr-ue-sa-ue3"  # Unique ServiceAccount name
+
+imagePullSecrets:
+  - name: "regcred"
+
+config:
+  timeZone: "Europe/Paris"
+  rfSimServer: "oai-ran"
+  fullImsi: "001010000000102"  # Unique IMSI for UE3
+  fullKey: "fec86ba6eb707ed08905757b1bb44b8f"  # Unique key
+  opc: "C42449363BBAD02B66D16BC975D77CC1"  # Unique OPC
+  dnn: "oai"
+  sst: "1"
+  sd: "16777215"
+  usrp: "rfsim"
+  useAdditionalOptions: "--sa --rfsim -r 106 --numerology 1 -C 3619200000 --log_config.global_log_options level,nocolor,time"
+
+podSecurityContext:
+  runAsUser: 0
+  runAsGroup: 0
+
+securityContext:
+  capabilities:
+    add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    drop:
+      - ALL
+
+start:
+  nrue: true
+  tcpdump: false
+
+includeTcpDumpContainer: false
+
+tcpdumpimage:
+  repository: docker.technotales.ir/oaisoftwarealliance/oai-tcpdump-init
+  version: alpine-3.20
+  pullPolicy: IfNotPresent
+
+resources:
+  define: false
+  limits:
+    nf:
+      cpu: 1500m
+      memory: 1Gi
+    tcpdump:
+      cpu: 200m
+      memory: 128Mi
+  requests:
+    nf:
+      cpu: 1500m
+      memory: 1Gi
+    tcpdump:
+      cpu: 100m
+      memory: 128Mi
+
+terminationGracePeriodSeconds: 0
+
+nodeSelector: {}
+nodeName:

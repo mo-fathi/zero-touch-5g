@@ -1,6 +1,8 @@
 import random
 import time
+import datetime
 from kafka import KafkaConsumer
+from kafka import KafkaProducer
 import json
 import numpy as np
 
@@ -42,18 +44,19 @@ producer = KafkaProducer(
 
 # Get state: (CPU_core, RAM_core, CPU_ran, RAM_ran, BW_ran, queue_length)
 def get_state():
-    cpu_core = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "core")
-    ram_core = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "core")
-    cpu_ran = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "ran")
-    ram_ran = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "ran")
-    bw_ran = sum(nodes[n]["BW"] for n in nodes if nodes[n]["type"] == "ran")
-    queue_len = len([msg for msg in consumer])  # Approximate queue length
-    return (cpu_core, ram_core, cpu_ran, ram_ran, bw_ran, queue_len)
-
+    # cpu_core = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "core")
+    # ram_core = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "core")
+    # cpu_ran = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "ran")
+    # ram_ran = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "ran")
+    # bw_ran = sum(nodes[n]["BW"] for n in nodes if nodes[n]["type"] == "ran")
+    # queue_len = len([msg for msg in consumer])  # Approximate queue length
+    # return (cpu_core, ram_core, cpu_ran, ram_ran, bw_ran, queue_len)
+    return "good"
 # Q-learning action selection
 def choose_action(state):
     if random.uniform(0, 1) < epsilon:
-        return random.randint(0, 1)  # Explore
+        # return random.randint(0, 1)  # Explore
+        return 1
     else:
         # if state not in q_table:
         #     q_table[state] = [0, 0]  # Initialize for accept (1) and reject (0)
@@ -63,10 +66,20 @@ def choose_action(state):
 
 # AC Agent with Q-learning
 def admission_control(nsr):
-    global current_time
     state = get_state()
     action = choose_action(state)
+
+    # print(action)
     
+    
+    if action == 1:
+        # Publish accepted NSR to deploy topic
+        print("nsr id ",nsr.get('id', 'default'), "  accepted")
+        producer.send(producer_topic, nsr)
+        producer.flush()  # Ensure message is sent immediately
+        
+    else:
+        print("nsr id ",nsr.get('id', 'default'), "  rejected")
     # if action == 1:  # Attempt to accept
     #     total_cpu_core = sum(vnf["CPU"] for vnf in nsr["VNFs"] if vnf["is_core"])
     #     total_ram_core = sum(vnf["RAM"] for vnf in nsr["VNFs"] if vnf["is_core"])
@@ -116,47 +129,45 @@ def admission_control(nsr):
     # q_table[state][action] += alpha * (reward + gamma * next_max - old_value)
 
 # Continuous simulation loop
-current_time = 0
-print("AC Agent started at 11:13 PM CEST, August 30, 2025...")
 # for message in consumer:
 
 
-try:
-    for message in consumer:
-        if message:
-            print(f"Received message: {message.value}")
-            nsr = message.value
-            admission_control(nsr)
+if __name__ == "__main__":
+    print("AC Agent started at ", datetime.datetime.now())
+   
+    try:
+        for message in consumer:
+            if message:
+                print(f"Received message: {message.value}")
+                nsr = message.value
+                admission_control(nsr)
 
-            # Publish accepted NSR to deploy topic
-            producer.send(producer_topic, nsr)
-            producer.flush()  # Ensure message is sent immediately
 
-            # # Update time and manage slice expiration
-            # current_time += 1
-            # for slice_id, details in list(active_slices.items()):
-            #     details["time_left"] -= 1
-            #     if details["time_left"] <= 0:
-            #         nodes[details["nodes"]["core"]]["CPU"] += details["resources"]["CPU_core"]
-            #         nodes[details["nodes"]["core"]]["RAM"] += details["resources"]["RAM_core"]
-            #         nodes[details["nodes"]["ran"]]["CPU"] += details["resources"]["CPU_ran"]
-            #         nodes[details["nodes"]["ran"]]["RAM"] += details["resources"]["RAM_ran"]
-            #         nodes[details["nodes"]["ran"]]["BW"] += details["resources"]["BW"]
-            #         del active_slices[slice_id]
-            #         print(f"Slice NSR_{slice_id} expired at time {current_time:.1f}s")
+                # # Update time and manage slice expiration
+                # current_time += 1
+                # for slice_id, details in list(active_slices.items()):
+                #     details["time_left"] -= 1
+                #     if details["time_left"] <= 0:
+                #         nodes[details["nodes"]["core"]]["CPU"] += details["resources"]["CPU_core"]
+                #         nodes[details["nodes"]["core"]]["RAM"] += details["resources"]["RAM_core"]
+                #         nodes[details["nodes"]["ran"]]["CPU"] += details["resources"]["CPU_ran"]
+                #         nodes[details["nodes"]["ran"]]["RAM"] += details["resources"]["RAM_ran"]
+                #         nodes[details["nodes"]["ran"]]["BW"] += details["resources"]["BW"]
+                #         del active_slices[slice_id]
+                #         print(f"Slice NSR_{slice_id} expired at time {current_time:.1f}s")
 
-            # # Print current state every 5 seconds
-            # if current_time % 5 == 0:
-            #     state = get_state()
-            #     print(f"\nTime: {current_time:.1f}s | Active slices: {len(active_slices)}")
-            #     print(f"Remaining resources: {nodes}")
-            #     print(f"State: {state}")
-            #     print(f"Q-table size: {len(q_table)}")
-            #     print("-" * 50)
+                # # Print current state every 5 seconds
+                # if current_time % 5 == 0:
+                #     state = get_state()
+                #     print(f"\nTime: {current_time:.1f}s | Active slices: {len(active_slices)}")
+                #     print(f"Remaining resources: {nodes}")
+                #     print(f"State: {state}")
+                #     print(f"Q-table size: {len(q_table)}")
+                #     print("-" * 50)
 
-            # time.sleep(1)  # Simulate 1 second per step
-            
-except Exception as e:
-    print(f"An exception occurred: {e}")
-finally:
-    consumer.close()
+                # time.sleep(1)  # Simulate 1 second per step
+                
+    except Exception as e:
+        print(f"An exception occurred: {e}")
+    finally:
+        consumer.close()
