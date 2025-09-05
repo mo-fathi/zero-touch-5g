@@ -5,6 +5,10 @@ from kafka import KafkaConsumer
 from kafka import KafkaProducer
 import json
 import numpy as np
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
+from kubernetes.utils.quantity import parse_quantity
+from decimal import Decimal
 
 # Cluster configuration (simulated Kind nodes)
 nodes = {
@@ -43,15 +47,65 @@ producer = KafkaProducer(
 )
 
 # Get state: (CPU_core, RAM_core, CPU_ran, RAM_ran, BW_ran, queue_length)
-def get_state():
-    # cpu_core = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "core")
-    # ram_core = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "core")
-    # cpu_ran = sum(nodes[n]["CPU"] for n in nodes if nodes[n]["type"] == "ran")
-    # ram_ran = sum(nodes[n]["RAM"] for n in nodes if nodes[n]["type"] == "ran")
-    # bw_ran = sum(nodes[n]["BW"] for n in nodes if nodes[n]["type"] == "ran")
-    # queue_len = len([msg for msg in consumer])  # Approximate queue length
-    # return (cpu_core, ram_core, cpu_ran, ram_ran, bw_ran, queue_len)
-    return "good"
+def get_node_state(node_name):
+    # Load config (use load_incluster_config() if running inside Kubernetes)
+    config.load_kube_config()
+    
+    v1 = client.CoreV1Api()
+    
+    try:
+        # Get the node details
+        node = v1.read_node(node_name)
+        allocatable = node.status.allocatable
+
+        print (node.status)
+        
+        # Parse allocatable CPU (in cores) and memory (in bytes)
+        alloc_cpu = parse_quantity(allocatable.get('cpu', '0'))
+        alloc_mem = parse_quantity(allocatable.get('memory', '0'))
+        
+        # Get all non-terminated pods on the node (with pagination handling)
+        pods = []
+        field_selector = f"spec.nodeName={node_name},status.phase!=Succeeded,status.phase!=Failed"
+        limit = 500  # Arbitrary high limit for pagination; adjust as needed
+        _continue = None
+        
+        while True:
+            response = v1.list_pod_for_all_namespaces(
+                field_selector=field_selector,
+                limit=limit,
+                _continue=_continue
+            )
+            pods.extend(response.items)
+            _continue = response.metadata._continue
+            if not _continue:
+                break
+        
+        # Sum requested resources from pods
+        used_cpu = Decimal(0.0)
+        used_mem = Decimal(0.0)
+        for pod in pods:
+            for container in pod.spec.containers:
+                if container.resources and container.resources.requests:
+                    if 'cpu' in container.resources.requests:
+                        used_cpu += parse_quantity(container.resources.requests['cpu'])
+                    if 'memory' in container.resources.requests:
+                        used_mem += parse_quantity(container.resources.requests['memory'])
+        
+        # Calculate remaining
+        remaining_cpu = alloc_cpu - used_cpu
+        remaining_mem = alloc_mem - used_mem
+        
+        print (alloc_cpu, "-", used_cpu)
+        print (alloc_mem, "-", used_mem)
+        return {
+            'remaining_cpu_cores': remaining_cpu,
+            'remaining_memory_bytes': remaining_mem
+        }
+    
+    except ApiException as e:
+        print(f"API exception: {e}")
+        return None
 # Q-learning action selection
 def choose_action(state):
     if random.uniform(0, 1) < epsilon:
