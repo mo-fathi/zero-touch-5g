@@ -99,8 +99,8 @@ def get_node_state(node_name):
         print (alloc_cpu, "-", used_cpu)
         print (alloc_mem, "-", used_mem)
         return {
-            'remaining_cpu_cores': remaining_cpu,
-            'remaining_memory_bytes': remaining_mem
+            'remaining_cpu': remaining_cpu,
+            'remaining_memory': remaining_mem
         }
     
     except ApiException as e:
@@ -117,10 +117,37 @@ def choose_action(state):
         # return np.argmax(q_table[state])  # Exploit
         return 0
     
+def get_state():
+
+    state = {
+        'remaining_cpu_cores': Decimal(0.0),
+        'remaining_ram_cores': Decimal(0.0),
+        'remaining_cpu_rans': Decimal(0.0),
+        'remaining_ram_rans': Decimal(0.0),
+        'remaining_bandwith_tans': Decimal(0.0)
+    }
+    for node in nodes:
+        node_state = get_node_state(node)
+        
+        # TO DO
+        # seprate resoruces base on node types
+
+        state['remaining_cpu_cores'] += node_state['remaining_cpu']
+        state['remaining_ram_cores'] += node_state['remaining_ram_cores']
+
+    
+
+    return state
+
 
 # AC Agent with Q-learning
 def admission_control(nsr):
+
+    # get cluster remaining resource state
     state = get_state()
+    # add nsr to state
+    state['NSR'] = nsr
+    # choose action by algorithm 
     action = choose_action(state)
 
     # print(action)
