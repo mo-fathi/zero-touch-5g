@@ -9,13 +9,12 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from kubernetes.utils.quantity import parse_quantity
 from decimal import Decimal
+import math
 
-# Cluster configuration (simulated Kind nodes)
-nodes = {
-    "V1": {"type": "core", "CPU": 50, "RAM": 100},
-    "V2": {"type": "core", "CPU": 50, "RAM": 100},
-    "V3": {"type": "ran", "CPU": 50, "RAM": 100, "BW": 100}
-}
+# Cluster configuration
+# a list of node names 
+nodes = []
+    
 
 # Active slices tracking
 active_slices = {}
@@ -24,7 +23,7 @@ active_slices = {}
 q_table = {}  # State-action pairs
 alpha = 0.1   # Learning rate
 gamma = 0.9   # Discount factor
-epsilon = 0.1 # Exploration rate
+epsilon = 1.0 # Exploration rate
 
 # Kafka configuration
 bootstrap_servers = ['localhost:9092']
@@ -46,66 +45,115 @@ producer = KafkaProducer(
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
+# Convert values of resources
+def parse_quantity(quantity_str):
+    """
+    Convert Kubernetes quantity strings (e.g. '100m', '2Gi') to float values.
+    CPU: returns cores as float
+    Memory: returns bytes as float
+    """
+    quantity_str = str(quantity_str).strip()
+    if quantity_str.endswith('m'):  # CPU in millicores
+        return float(quantity_str[:-1]) / 1000
+    elif quantity_str.endswith('n'): # CPU in nanosecond
+        return float(quantity_str[:-1]) / 1_000_000_000.0
+    elif quantity_str.endswith('Ki'):
+        return float(quantity_str[:-2]) * 1024
+    elif quantity_str.endswith('Mi'):
+        return float(quantity_str[:-2]) * 1024 ** 2
+    elif quantity_str.endswith('Gi'):
+        return float(quantity_str[:-2]) * 1024 ** 3
+    elif quantity_str.endswith('Ti'):
+        return float(quantity_str[:-2]) * 1024 ** 4
+    else:
+        try:
+            return float(quantity_str)
+        except ValueError:
+            return 0.0
+
+
+def get_realtime_resources():
+    # Load configuration
+    try:
+        config.load_kube_config()        # local dev
+    except:
+        config.load_incluster_config()   # inside cluster
+
+    v1 = client.CoreV1Api()
+    custom_api = client.CustomObjectsApi()
+
+    nodes = v1.list_node().items
+    total_alloc_cpu = total_alloc_mem = 0.0
+    total_used_cpu = total_used_mem = 0.0
+
+    # Get metrics from Metrics API (requires metrics-server)
+    #TODO just worker nodes should be add for this metrics tupple
+    metrics = custom_api.list_cluster_custom_object(
+        group="metrics.k8s.io",
+        version="v1beta1",
+        plural="nodes"
+    )
+
+
+    usage_by_node = {
+        item["metadata"]["name"]: item["usage"]
+        for item in metrics["items"]
+    }
+
+    for node in nodes:
+        labels = node.metadata.labels or {}
+        name = node.metadata.name
+
+
+        # Skip control-plane / master nodes
+        if (
+            "node-role.kubernetes.io/control-plane" in labels
+            or "node-role.kubernetes.io/master" in labels
+        ):
+            continue
+
+        alloc = node.status.allocatable
+        alloc_cpu = parse_quantity(alloc["cpu"])
+        alloc_mem = parse_quantity(alloc["memory"])
+
+        total_alloc_cpu += alloc_cpu
+        total_alloc_mem += alloc_mem
+
+        if name in usage_by_node:
+            usage = usage_by_node[name]
+            used_cpu = parse_quantity(usage["cpu"])
+            used_mem = parse_quantity(usage["memory"])
+        else:
+            used_cpu = used_mem = 0.0
+
+        total_used_cpu += used_cpu
+        total_used_mem += used_mem
+
+
+    free_cpu = total_alloc_cpu - total_used_cpu
+    free_mem = total_alloc_mem - total_used_mem
+
+    print("=== Kubernetes Cluster Real-Time Resources ===")
+    print(f"Allocatable CPU cores: {total_alloc_cpu:.2f}")
+    print(f"Used CPU cores:        {total_used_cpu:.2f}")
+    print(f"Free CPU cores:        {free_cpu:.2f}\n")
+
+    print(f"Allocatable Memory:    {total_alloc_mem / (1024 ** 3):.2f} GiB")
+    print(f"Used Memory:           {total_used_mem / (1024 ** 3):.2f} GiB")
+    print(f"Free Memory:           {free_mem / (1024 ** 3):.2f} GiB")
+
+    return {
+        'total_alloc_cpu'   : total_alloc_cpu,
+        'total_used_cpu'    : total_used_cpu,
+        'free_cpu'          : free_cpu,
+        'total_alloc_mem'   : total_alloc_mem,
+        'total_used_mem'    : total_used_mem,
+        'free_mem'          : free_mem
+    }
+
 # Get state: (CPU_core, RAM_core, CPU_ran, RAM_ran, BW_ran, queue_length)
 def get_node_state(node_name):
-    # Load config (use load_incluster_config() if running inside Kubernetes)
-    config.load_kube_config()
     
-    v1 = client.CoreV1Api()
-    
-    try:
-        # Get the node details
-        node = v1.read_node(node_name)
-        allocatable = node.status.allocatable
-
-        print (node.status)
-        
-        # Parse allocatable CPU (in cores) and memory (in bytes)
-        alloc_cpu = parse_quantity(allocatable.get('cpu', '0'))
-        alloc_mem = parse_quantity(allocatable.get('memory', '0'))
-        
-        # Get all non-terminated pods on the node (with pagination handling)
-        pods = []
-        field_selector = f"spec.nodeName={node_name},status.phase!=Succeeded,status.phase!=Failed"
-        limit = 500  # Arbitrary high limit for pagination; adjust as needed
-        _continue = None
-        
-        while True:
-            response = v1.list_pod_for_all_namespaces(
-                field_selector=field_selector,
-                limit=limit,
-                _continue=_continue
-            )
-            pods.extend(response.items)
-            _continue = response.metadata._continue
-            if not _continue:
-                break
-        
-        # Sum requested resources from pods
-        used_cpu = Decimal(0.0)
-        used_mem = Decimal(0.0)
-        for pod in pods:
-            for container in pod.spec.containers:
-                if container.resources and container.resources.requests:
-                    if 'cpu' in container.resources.requests:
-                        used_cpu += parse_quantity(container.resources.requests['cpu'])
-                    if 'memory' in container.resources.requests:
-                        used_mem += parse_quantity(container.resources.requests['memory'])
-        
-        # Calculate remaining
-        remaining_cpu = alloc_cpu - used_cpu
-        remaining_mem = alloc_mem - used_mem
-        
-        print (alloc_cpu, "-", used_cpu)
-        print (alloc_mem, "-", used_mem)
-        return {
-            'remaining_cpu': remaining_cpu,
-            'remaining_memory': remaining_mem
-        }
-    
-    except ApiException as e:
-        print(f"API exception: {e}")
-        return None
 # Q-learning action selection
 def choose_action(state):
     if random.uniform(0, 1) < epsilon:
@@ -117,34 +165,26 @@ def choose_action(state):
         # return np.argmax(q_table[state])  # Exploit
         return 0
     
-def get_state():
+def get_resource_metrics():
 
-    state = {
-        'remaining_cpu_cores': Decimal(0.0),
-        'remaining_ram_cores': Decimal(0.0),
-        'remaining_cpu_rans': Decimal(0.0),
-        'remaining_ram_rans': Decimal(0.0),
+    # TODO seprate RAN and Core resource metrics
+    current_resources = get_realtime_resources()
+    cluster_resource_metrics = {
+        'remaining_cpu_cores': current_resources['free_cpu'],
+        'remaining_ram_cores': current_resources['free_mem'],
+        'remaining_cpu_rans': current_resources['free_cpu'],
+        'remaining_ram_rans': current_resources['free_mem'],
         'remaining_bandwith_tans': Decimal(0.0)
     }
-    for node in nodes:
-        node_state = get_node_state(node)
-        
-        # TO DO
-        # seprate resoruces base on node types
-
-        state['remaining_cpu_cores'] += node_state['remaining_cpu']
-        state['remaining_ram_cores'] += node_state['remaining_ram_cores']
-
     
-
-    return state
+    return cluster_resource_metrics
 
 
 # AC Agent with Q-learning
 def admission_control(nsr):
 
     # get cluster remaining resource state
-    state = get_state()
+    state = get_resource_metrics()
     # add nsr to state
     state['NSR'] = nsr
     # choose action by algorithm 
@@ -212,10 +252,38 @@ def admission_control(nsr):
 # Continuous simulation loop
 # for message in consumer:
 
+def get_node_names():
+    try:
+        # Load Kubernetes configuration (use load_incluster_config() if running inside a pod)
+        config.load_kube_config()
+        
+        # Initialize CoreV1Api
+        v1 = client.CoreV1Api()
+        
+        # List all nodes
+        nodes = v1.list_node()
+        
+        # Extract node names
+        node_names = [node.metadata.name for node in nodes.items]
+        
+        return node_names
+    
+    except client.ApiException as e:
+        print(f"API exception: {e}")
+        return []
+
+# Example usage
+# node_names = get_node_names()
+# print(node_names)  # Output: ['kind-control-plane', 'kind-worker', 'kind-worker2']
+
 
 if __name__ == "__main__":
     print("AC Agent started at ", datetime.datetime.now())
    
+    # load kubernetes nodes
+    nodes = get_node_names()
+    print (nodes)
+
     try:
         for message in consumer:
             if message:
