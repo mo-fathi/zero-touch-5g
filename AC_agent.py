@@ -10,11 +10,54 @@ from kubernetes.client.rest import ApiException
 from kubernetes.utils.quantity import parse_quantity
 from decimal import Decimal
 import math
+import redis
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from collections import deque
+#import matplotlib.pyplot as plt
+
+
+class DQN(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(DQN, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, action_dim)
+    
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
+
+class ReplayBuffer:
+    def __init__(self, capacity=10000):
+        self.buffer = deque(maxlen=capacity)
+    
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+    
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state, done = zip(*batch)
+        return (
+            np.array(state, dtype=np.float32), 
+            np.array(action, dtype=np.int64), 
+            np.array(reward, dtype=np.float32), 
+            np.array(next_state, dtype=np.float32), 
+            np.array(done, dtype=np.bool_)
+        )
+    
+    def __len__(self):
+        return len(self.buffer)
 
 # Cluster configuration
 # a list of node names 
 nodes = []
     
+# List of possible actions for Admission Control
+AC_ACTIONS = ["Accept", "Reject"]
+
 
 # Active slices tracking
 active_slices = {}
@@ -25,9 +68,7 @@ alpha = 0.1   # Learning rate
 gamma = 0.9   # Discount factor
 epsilon = 1.0 # Exploration rate
 
-# Kafka configuration
-bootstrap_servers = ['localhost:9092']
-consumer_topic = 'lambda'
+
 producer_topic = 'deploy'
 
 # Initialize Kafka consumer for lambda
@@ -44,6 +85,15 @@ producer = KafkaProducer(
     bootstrap_servers=bootstrap_servers,
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
+
+# Redis configuration
+keeper = redis.Redis(
+    host='localhost',
+    port=6379,
+    db=0,
+    decode_responses=True  # ensures returned values are strings instead of bytes
+)
+
 
 # Convert values of resources
 def parse_quantity(quantity_str):
@@ -151,19 +201,16 @@ def get_realtime_resources():
         'free_mem'          : free_mem
     }
 
-# Get state: (CPU_core, RAM_core, CPU_ran, RAM_ran, BW_ran, queue_length)
-def get_node_state(node_name):
-    
+# TODO normalizing the state     
 # Q-learning action selection
 def choose_action(state):
+    if state not in q_table:
+        q_table[state] = [0, 0]  # Initialize for accept (1) and reject (0)
+    
     if random.uniform(0, 1) < epsilon:
-        # return random.randint(0, 1)  # Explore
-        return 1
+        return random.choose(AC_ACTIONS)  # Explore
     else:
-        # if state not in q_table:
-        #     q_table[state] = [0, 0]  # Initialize for accept (1) and reject (0)
-        # return np.argmax(q_table[state])  # Exploit
-        return 0
+        return ACTIONS[np.argmax(q_table[state])]  # Exploit
     
 def get_resource_metrics():
 
@@ -180,78 +227,21 @@ def get_resource_metrics():
     return cluster_resource_metrics
 
 
-# AC Agent with Q-learning
-def admission_control(nsr):
+def reward_function():
+    # SUM (Revenue - Cost) for all ns
+    reward = 0.0
+    for ns in networkSlices:
+        reward += (get_ns_revenue() - get_ns_cost()) * T0
 
-    # get cluster remaining resource state
-    state = get_resource_metrics()
-    # add nsr to state
-    state['NSR'] = nsr
-    # choose action by algorithm 
-    action = choose_action(state)
+    return reward
 
-    # print(action)
+
+def get_ns_cost(ns_id):
+    # return current cost
+    return 0
+def get_ns_revenue(ns_id):
+    return 0
     
-    
-    if action == 1:
-        # Publish accepted NSR to deploy topic
-        print("nsr id ",nsr.get('id', 'default'), "  accepted")
-        producer.send(producer_topic, nsr)
-        producer.flush()  # Ensure message is sent immediately
-        
-    else:
-        print("nsr id ",nsr.get('id', 'default'), "  rejected")
-    # if action == 1:  # Attempt to accept
-    #     total_cpu_core = sum(vnf["CPU"] for vnf in nsr["VNFs"] if vnf["is_core"])
-    #     total_ram_core = sum(vnf["RAM"] for vnf in nsr["VNFs"] if vnf["is_core"])
-    #     total_cpu_ran = sum(vnf["CPU"] for vnf in nsr["VNFs"] if not vnf["is_core"])
-    #     total_ram_ran = sum(vnf["RAM"] for vnf in nsr["VNFs"] if not vnf["is_core"])
-    #     bw_required = nsr["BW"]
-
-    #     can_deploy = False
-    #     core_node = next((n for n in nodes if nodes[n]["type"] == "core" and
-    #                      total_cpu_core <= nodes[n]["CPU"] and total_ram_core <= nodes[n]["RAM"]), None)
-    #     ran_node = next((n for n in nodes if nodes[n]["type"] == "ran" and
-    #                     total_cpu_ran <= nodes[n]["CPU"] and total_ram_ran <= nodes[n]["RAM"] and
-    #                     bw_required <= nodes[n]["BW"]), None)
-
-    #     if core_node and ran_node:
-    #         can_deploy = True
-    #         nodes[core_node]["CPU"] -= total_cpu_core
-    #         nodes[core_node]["RAM"] -= total_ram_core
-    #         nodes[ran_node]["CPU"] -= total_cpu_ran
-    #         nodes[ran_node]["RAM"] -= total_ram_ran
-    #         nodes[ran_node]["BW"] -= bw_required
-
-    #     if can_deploy:
-    #         active_slices[nsr["id"]] = {
-    #             "time_left": nsr["T0"],
-    #             "resources": {"CPU_core": total_cpu_core, "RAM_core": total_ram_core,
-    #                          "CPU_ran": total_cpu_ran, "RAM_ran": total_ram_ran, "BW": bw_required},
-    #             "nodes": {"core": core_node, "ran": ran_node}
-    #         }
-    #         reward = 10  # Positive reward for successful acceptance
-    #         print(f"Accepted NSR_{nsr['id']} at time {current_time:.1f}s on {core_node} (core) and {ran_node} (ran), T0={nsr['T0']:.1f}s")
-    #     else:
-    #         reward = -5  # Penalty for attempting infeasible acceptance
-    #         print(f"Rejected NSR_{nsr['id']} at time {current_time:.1f}s due to insufficient resources")
-    # else:
-    #     reward = -5  # Penalty for rejection
-    #     print(f"Rejected NSR_{nsr['id']} at time {current_time:.1f}s by Q-learning")
-
-    # Update Q-value
-    # next_state = get_state()
-    # if state not in q_table:
-    #     q_table[state] = [0, 0]
-    # if next_state not in q_table:
-    #     q_table[next_state] = [0, 0]
-    # old_value = q_table[state][action]
-    # next_max = max(q_table[next_state])
-    # q_table[state][action] += alpha * (reward + gamma * next_max - old_value)
-
-# Continuous simulation loop
-# for message in consumer:
-
 def get_node_names():
     try:
         # Load Kubernetes configuration (use load_incluster_config() if running inside a pod)
@@ -272,9 +262,61 @@ def get_node_names():
         print(f"API exception: {e}")
         return []
 
-# Example usage
-# node_names = get_node_names()
-# print(node_names)  # Output: ['kind-control-plane', 'kind-worker', 'kind-worker2']
+
+
+## Admission Control State
+# S_ac = {Remaining CPU & RAM for both core and ran nodes, 
+#           NSR[i],
+#           queue length,
+#           revenue avg in queue
+#           QoS avg in queue
+#             }
+def get_AC_state(nsr):
+
+    # get cluster remaining resource state
+    state = get_resource_metrics()
+
+    # add nsr to state
+    state['L_max_int'] = nsr["QoS"]["L_max_int"]
+    state['L_max_ext'] = nsr["QoS"]["L_max_ext"]
+    state['Phi_min_int'] = nsr["QoS"]["Phi_min_int"]
+    state['Phi_min_ext'] = nsr["QoS"]["Phi_min_ext"]
+    state['P_max_int'] = nsr["QoS"]["P_max_int"]
+    state['P_max_ext'] = nsr["QoS"]["P_max_ext"]
+
+
+
+    # add queue parameter to state
+    state['n'] = keeper.get('q_size')
+    state['revenue_avg'] = keeper.get('sum_of_revenue') / state['n']
+    # TODO Add lambda QoS parameter to state
+
+
+    return state
+
+
+# AC Agent with Q-learning
+def admission_control(nsr):
+
+    # get RL state of environment
+    state = get_AC_state(nsr)
+    
+    # Choose action by algorithm 
+    action = choose_action(state)
+
+    # Calculate Reward
+    reward = reward_function()
+    # print(action)
+    
+    
+    if action == 1:
+        # Publish accepted NSR to deploy topic
+        print("nsr id ",nsr.get('id', 'default'), "  accepted")
+        producer.send(producer_topic, nsr)
+        producer.flush()  # Ensure message is sent immediately
+        
+    else:
+        print("nsr id ",nsr.get('id', 'default'), "  rejected")
 
 
 if __name__ == "__main__":
@@ -282,39 +324,31 @@ if __name__ == "__main__":
    
     # load kubernetes nodes
     nodes = get_node_names()
-    print (nodes)
+    # print (nodes)
 
+    # creating NNs
+    action_dim = 2  # Accept/Reject
+    # TODO
+    # state_dim = len(get_AC_state())
+    state_dim = 13
+
+    eval_net = DQN(state_dim, action_dim)
+    target_net = DQN(state_dim, action_dim)
+
+    target_net.load_state_dict(eval_net.state_dict())
+    target_net.eval()
+
+    optimizer = optim.Adam(eval_net.parameters(), lr=lr)
+    replay_buffer = ReplayBuffer()
+
+
+# Admission Control cycle:
     try:
         for message in consumer:
             if message:
                 print(f"Received message: {message.value}")
                 nsr = message.value
                 admission_control(nsr)
-
-
-                # # Update time and manage slice expiration
-                # current_time += 1
-                # for slice_id, details in list(active_slices.items()):
-                #     details["time_left"] -= 1
-                #     if details["time_left"] <= 0:
-                #         nodes[details["nodes"]["core"]]["CPU"] += details["resources"]["CPU_core"]
-                #         nodes[details["nodes"]["core"]]["RAM"] += details["resources"]["RAM_core"]
-                #         nodes[details["nodes"]["ran"]]["CPU"] += details["resources"]["CPU_ran"]
-                #         nodes[details["nodes"]["ran"]]["RAM"] += details["resources"]["RAM_ran"]
-                #         nodes[details["nodes"]["ran"]]["BW"] += details["resources"]["BW"]
-                #         del active_slices[slice_id]
-                #         print(f"Slice NSR_{slice_id} expired at time {current_time:.1f}s")
-
-                # # Print current state every 5 seconds
-                # if current_time % 5 == 0:
-                #     state = get_state()
-                #     print(f"\nTime: {current_time:.1f}s | Active slices: {len(active_slices)}")
-                #     print(f"Remaining resources: {nodes}")
-                #     print(f"State: {state}")
-                #     print(f"Q-table size: {len(q_table)}")
-                #     print("-" * 50)
-
-                # time.sleep(1)  # Simulate 1 second per step
                 
     except Exception as e:
         print(f"An exception occurred: {e}")
