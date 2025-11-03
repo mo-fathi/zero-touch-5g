@@ -328,10 +328,11 @@ if __name__ == "__main__":
 
     # creating NNs
     action_dim = 2  # Accept/Reject
-    # TODO
+    # TODO replace dynamic state_dim for more integration.
     # state_dim = len(get_AC_state())
     state_dim = 13
 
+    # Create Evaluation NN and Target NN
     eval_net = DQN(state_dim, action_dim)
     target_net = DQN(state_dim, action_dim)
 
@@ -348,8 +349,42 @@ if __name__ == "__main__":
             if message:
                 print(f"Received message: {message.value}")
                 nsr = message.value
-                admission_control(nsr)
                 
+                # TODO make admission control functional or class
+                # admission_control(nsr)
+
+                ### Admission Control Process ###
+                # get RL state of environment
+                state = get_AC_state(nsr)
+                
+                # Choose action by algorithm 
+                # Epsilon-greedy action
+                if random.random() < epsilon:
+                    action = random.randint(0, 1) # Accept => 1 , Reject => 0
+                else:
+                    with torch.no_grad():
+                        q_values = eval_net(torch.tensor(state).unsqueeze(0))
+                        action = q_values.argmax().item()
+
+                # Calculate Reward
+                reward = reward_function()
+                # print(action)
+                
+                
+                if action == 1:
+                    # Publish accepted NSR to deploy topic
+                    print("nsr id ",nsr.get('id', 'default'), "  accepted")
+                    producer.send(producer_topic, nsr)
+                    producer.flush()  # Ensure message is sent immediately
+                    
+                else:
+                    print("nsr id ",nsr.get('id', 'default'), "  rejected")
+
+
+
+
+
+
     except Exception as e:
         print(f"An exception occurred: {e}")
     finally:
