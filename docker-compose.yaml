@@ -22,6 +22,11 @@ services:
       CLUSTER_ID: "Mk3OEYBSD34fcwNTJENDM2Qk"
     volumes:
       - kafka_data:/var/lib/kafka/data
+  redis:
+    image: docker.technotales.ir/library/redis:8.2.2
+    container_name: redis
+    ports:
+      - "6379:6379"
 
 volumes:
   kafka_data:
