@@ -57,7 +57,7 @@ while True:
         # Update Redis queue stats
         q_size = keeper.incr('q_size')
 
-       if q_size == 1:
+        if q_size == 1:
             keeper.set('sum_revenue', 0)
             keeper.set('sum_L_max_int', 0.0)
             keeper.set('sum_L_max_ext', 0.0)
