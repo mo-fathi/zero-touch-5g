@@ -1,0 +1,55 @@
+grafana:
+  enabled: true
+  adminPassword: "ChangeMeStrongPassword"
+  persistence:
+    enabled: true
+    accessModes: ["ReadWriteOnce"]
+    size: 10Gi
+  service:
+    type: ClusterIP
+
+prometheus:
+  prometheusSpec:
+    #    image:
+    #      registry: docker.technotales.ir
+    #      repository: monitoring/prometheus
+    #      tag: v2.54.0
+    retention: "15d"
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  image:
+    registry: docker.technotales.ir
+    repository: kube-state-metrics/kube-state-metrics
+    tag: v2.17.0
+    
+
+nodeExporter:
+  enabled: true
+    #  image:
+    #    registry: docker.technotales.ir
+    #    repository: monitoring/node-exporter
+    #    tag: v1.10.2
+
+# scrape additional service monitors if you have apps exposing /metrics
+additionalServiceMonitors: []
+
