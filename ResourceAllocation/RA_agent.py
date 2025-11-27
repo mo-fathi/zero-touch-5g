@@ -13,7 +13,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # ----------------------------- CONFIG -----------------------------
 MAX_SLICES = 10               # Increase later for real use
-MAX_NFS = 6                   # Max network functions per slice
+NUM_NFS = 8                   # Fixed number of network functions per slice (changed from max/random)
 SLICE_FEATURE_DIM = 22        # Same as before for slice-level + QoS
 NF_FEATURE_DIM = 6            # Per NF: req_cpu, alloc_cpu, load_cpu, req_mem, alloc_mem, load_mem
 # ------------------------------------------------------------------
@@ -31,7 +31,7 @@ class SimpleClusterSimulator:
     def add_slice(self):
         if len(self.active_slices) >= MAX_SLICES:
             return
-        num_nfs = random.randint(3, MAX_NFS)
+        num_nfs = NUM_NFS  # Fixed to exactly 8
         nfs = []
         for _ in range(num_nfs):
             req_cpu = random.uniform(0.5, 2.0)
@@ -98,13 +98,13 @@ class K8sSliceEnv(gym.Env):
         else:
             raise NotImplementedError("Real Kubernetes mode not implemented in this example")
 
-        action_dim = MAX_SLICES * (2 * MAX_NFS + 1)  # cpu/mem deltas per NF + bw per slice
+        action_dim = MAX_SLICES * (2 * NUM_NFS + 1)  # cpu/mem deltas per NF + bw per slice
         self.action_space = Box(low=-5.0, high=5.0, shape=(action_dim,), dtype=np.float32)
 
         self.observation_space = GymDict({
             "slice_features": Box(low=0.0, high=1e6, shape=(MAX_SLICES, SLICE_FEATURE_DIM), dtype=np.float32),
-            "nf_features": Box(low=0.0, high=1e6, shape=(MAX_SLICES, MAX_NFS, NF_FEATURE_DIM), dtype=np.float32),
-            "nf_mask": Box(low=0, high=1, shape=(MAX_SLICES, MAX_NFS), dtype=np.float32),
+            "nf_features": Box(low=0.0, high=1e6, shape=(MAX_SLICES, NUM_NFS, NF_FEATURE_DIM), dtype=np.float32),
+            "nf_mask": Box(low=0, high=1, shape=(MAX_SLICES, NUM_NFS), dtype=np.float32),
             "mask": Box(low=0, high=1, shape=(MAX_SLICES,), dtype=np.float32),
             "cluster": Box(low=0.0, high=1e6, shape=(6,), dtype=np.float32),  # cpu/mem/bw cap/used
         })
@@ -131,16 +131,16 @@ class K8sSliceEnv(gym.Env):
             active = len(self.simulator.active_slices)
 
             # Unpack and mask actions
-            cpu_deltas = np.zeros((MAX_SLICES, MAX_NFS))
-            mem_deltas = np.zeros((MAX_SLICES, MAX_NFS))
+            cpu_deltas = np.zeros((MAX_SLICES, NUM_NFS))
+            mem_deltas = np.zeros((MAX_SLICES, NUM_NFS))
             bw_deltas = np.zeros(MAX_SLICES)
 
             idx = 0
             for i in range(MAX_SLICES):
-                cpu_deltas[i] = action[idx:idx + MAX_NFS]
-                idx += MAX_NFS
-                mem_deltas[i] = action[idx:idx + MAX_NFS]
-                idx += MAX_NFS
+                cpu_deltas[i] = action[idx:idx + NUM_NFS]
+                idx += NUM_NFS
+                mem_deltas[i] = action[idx:idx + NUM_NFS]
+                idx += NUM_NFS
                 bw_deltas[i] = action[idx]
                 idx += 1
 
@@ -175,8 +175,8 @@ class K8sSliceEnv(gym.Env):
 
     def _get_observation(self) -> dict[str, np.ndarray]:
         slice_features = np.zeros((MAX_SLICES, SLICE_FEATURE_DIM), dtype=np.float32)
-        nf_features = np.zeros((MAX_SLICES, MAX_NFS, NF_FEATURE_DIM), dtype=np.float32)
-        nf_mask = np.zeros((MAX_SLICES, MAX_NFS), dtype=np.float32)
+        nf_features = np.zeros((MAX_SLICES, NUM_NFS, NF_FEATURE_DIM), dtype=np.float32)
+        nf_mask = np.zeros((MAX_SLICES, NUM_NFS), dtype=np.float32)
         mask = np.zeros(MAX_SLICES, dtype=np.float32)
         cluster = np.zeros(6, dtype=np.float32)
 
