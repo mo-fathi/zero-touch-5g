@@ -15,9 +15,13 @@ num_episodes = 10
 max_steps = 1000
 
 episode_rewards = []
-episode_utilizations = []
+episode_cpu_utils = []
+episode_mem_utils = []
+episode_bw_utils = []
 episode_qos_satisfied = []
-episode_overprovision = []
+episode_cpu_overprovision = []
+episode_mem_overprovision = []
+episode_bw_overprovision = []
 episode_active_slices = []
 
 for ep in range(num_episodes):
@@ -26,41 +30,77 @@ for ep in range(num_episodes):
     done = False
 
     rewards = []
-    utils = []
+    cpu_utils = []
+    mem_utils = []
+    bw_utils = []
     qos_ok_percent = []
-    overprov_percent = []
+    cpu_overprov_percent = []
+    mem_overprov_percent = []
+    bw_overprov_percent = []
     active_list = []
 
-    while not done and step < max_steps:   # ← FIXED: removed "is False"
+    while not done and step < max_steps:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
 
         # ---- Extract metrics from the simulator (safe because simulate=True) ----
-        total_load = total_alloc = total_qos_ok = total_over = 0.0
+        total_cpu_load = total_cpu_alloc = total_mem_load = total_mem_alloc = total_bw_load = total_bw_alloc = 0.0
+        total_qos_ok = total_cpu_over = total_mem_over = total_bw_over = 0.0
         active = len(env.simulator.active_slices)
 
         for s in env.simulator.active_slices:
-            total_load += s["load_cpu"]
-            total_alloc += s["allocated_cpu"]
+            load_cpu = sum(nf["cpu_load"] for nf in s["nfs"])
+            load_mem = sum(nf["mem_load"] for nf in s["nfs"])
+            load_bw = s["load_bw"]
+
+            total_cpu_load += load_cpu
+            total_cpu_alloc += s["allocated_cpu"]
+            total_mem_load += load_mem
+            total_mem_alloc += s["allocated_mem"]
+            total_bw_load += load_bw
+            total_bw_alloc += s["allocated_bw"]
 
             # QoS check (same logic as in reward function)
-            latency_ok = (s["load_cpu"] / max(s["allocated_cpu"], 0.1)) <= 1.1
-            cpu_ok = s["load_cpu"] <= s["allocated_cpu"] + 0.5
-            qos_ok = latency_ok and cpu_ok
+            int_latency = s["target_int_latency_ms"] * (load_cpu / max(s["allocated_cpu"], 0.1))
+            int_loss = max(0.0, load_cpu - s["allocated_cpu"]) / max(load_cpu, 0.1)
+            int_throughput = s["allocated_cpu"] * 10.0
+
+            ext_latency = s["target_ext_latency_ms"] * (load_bw / max(s["allocated_bw"], 0.1)) * (load_cpu / max(s["allocated_cpu"], 0.1))
+            ext_loss = max(0.0, load_bw - s["allocated_bw"]) / max(load_bw, 0.1)
+            ext_throughput = s["allocated_bw"] * 5.0
+
+            int_lat_ok = int_latency <= s["target_int_latency_ms"] * 1.1
+            int_loss_ok = int_loss <= s["target_int_loss"] * 1.1
+            int_thr_ok = int_throughput >= s["target_int_throughput"] * 0.9
+            ext_lat_ok = ext_latency <= s["target_ext_latency_ms"] * 1.1
+            ext_loss_ok = ext_loss <= s["target_ext_loss"] * 1.1
+            ext_thr_ok = ext_throughput >= s["target_ext_throughput"] * 0.9
+
+            qos_ok = all([int_lat_ok, int_loss_ok, int_thr_ok, ext_lat_ok, ext_loss_ok, ext_thr_ok])
             total_qos_ok += 1 if qos_ok else 0
 
             # Over-provisioning (extra resources beyond 40% headroom)
-            total_over += max(0.0, s["allocated_cpu"] - s["load_cpu"] * 1.4)
+            total_cpu_over += max(0.0, s["allocated_cpu"] - load_cpu * 1.4)
+            total_mem_over += max(0.0, s["allocated_mem"] - load_mem * 1.4)
+            total_bw_over += max(0.0, s["allocated_bw"] - load_bw * 1.4)
 
-        utilization = (total_load / total_alloc * 100) if total_alloc > 0 else 0
+        cpu_utilization = (total_cpu_load / total_cpu_alloc * 100) if total_cpu_alloc > 0 else 0
+        mem_utilization = (total_mem_load / total_mem_alloc * 100) if total_mem_alloc > 0 else 0
+        bw_utilization = (total_bw_load / total_bw_alloc * 100) if total_bw_alloc > 0 else 0
         qos_percent = (total_qos_ok / active * 100) if active > 0 else 100
-        overprov = (total_over / total_alloc * 100) if total_alloc > 0 else 0
+        cpu_overprov = (total_cpu_over / total_cpu_alloc * 100) if total_cpu_alloc > 0 else 0
+        mem_overprov = (total_mem_over / total_mem_alloc * 100) if total_mem_alloc > 0 else 0
+        bw_overprov = (total_bw_over / total_bw_alloc * 100) if total_bw_alloc > 0 else 0
 
         rewards.append(reward)
-        utils.append(utilization)
+        cpu_utils.append(cpu_utilization)
+        mem_utils.append(mem_utilization)
+        bw_utils.append(bw_utilization)
         qos_ok_percent.append(qos_percent)
-        overprov_percent.append(overprov)
+        cpu_overprov_percent.append(cpu_overprov)
+        mem_overprov_percent.append(mem_overprov)
+        bw_overprov_percent.append(bw_overprov)
         active_list.append(active)
 
         step += 1
@@ -69,68 +109,106 @@ for ep in range(num_episodes):
     def pad(arr):
         return np.pad(arr, (0, max_steps - len(arr)), constant_values=arr[-1] if arr else 0)
 
-    episode_rewards.append(np.cumsum(pad(rewards)))   # ← Also fixed: cumsum after pad to handle short eps
-    episode_utilizations.append(pad(utils))
+    episode_rewards.append(np.cumsum(pad(rewards)))   # cumsum after pad
+    episode_cpu_utils.append(pad(cpu_utils))
+    episode_mem_utils.append(pad(mem_utils))
+    episode_bw_utils.append(pad(bw_utils))
     episode_qos_satisfied.append(pad(qos_ok_percent))
-    episode_overprovision.append(pad(overprov_percent))
+    episode_cpu_overprovision.append(pad(cpu_overprov_percent))
+    episode_mem_overprovision.append(pad(mem_overprov_percent))
+    episode_bw_overprovision.append(pad(bw_overprov_percent))
     episode_active_slices.append(pad(active_list))
 
 # --------------------------------------------------------------
 # 3. Convert to numpy arrays for easy averaging
 # --------------------------------------------------------------
 rewards_arr = np.array(episode_rewards)                     # (ep, steps)
-utils_arr = np.array(episode_utilizations)
+cpu_utils_arr = np.array(episode_cpu_utils)
+mem_utils_arr = np.array(episode_mem_utils)
+bw_utils_arr = np.array(episode_bw_utils)
 qos_arr = np.array(episode_qos_satisfied)
-over_arr = np.array(episode_overprovision)
+cpu_over_arr = np.array(episode_cpu_overprovision)
+mem_over_arr = np.array(episode_mem_overprovision)
+bw_over_arr = np.array(episode_bw_overprovision)
 active_arr = np.array(episode_active_slices)
 
 mean_reward = rewards_arr.mean(axis=0)
 std_reward = rewards_arr.std(axis=0)
 
-mean_util = utils_arr.mean(axis=0)
-std_util = utils_arr.std(axis=0)
+mean_cpu_util = cpu_utils_arr.mean(axis=0)
+std_cpu_util = cpu_utils_arr.std(axis=0)
 
+mean_mem_util = mem_utils_arr.mean(axis=0)
+mean_bw_util = bw_utils_arr.mean(axis=0)
 mean_qos = qos_arr.mean(axis=0)
-mean_over = over_arr.mean(axis=0)
+mean_cpu_over = cpu_over_arr.mean(axis=0)
+mean_mem_over = mem_over_arr.mean(axis=0)
+mean_bw_over = bw_over_arr.mean(axis=0)
 mean_active = active_arr.mean(axis=0)
 
 steps = np.arange(max_steps)
 
 # --------------------------------------------------------------
-# 4. Plot everything
+# 4. Plot everything (expanded for new metrics)
 # --------------------------------------------------------------
-plt.figure(figsize=(15, 10))
+plt.figure(figsize=(18, 12))
 
-plt.subplot(2, 3, 1)
+plt.subplot(3, 3, 1)
 plt.plot(steps, mean_reward, label="Cumulative Reward")
 plt.fill_between(steps, mean_reward - std_reward, mean_reward + std_reward, alpha=0.3)
 plt.title("Cumulative Reward")
 plt.xlabel("Step")
 plt.grid(True)
 
-plt.subplot(2, 3, 2)
-plt.plot(steps, mean_util, color="green")
-plt.fill_between(steps, mean_util - std_util, mean_util + std_util, color="green", alpha=0.3)
+plt.subplot(3, 3, 2)
+plt.plot(steps, mean_cpu_util, color="green")
+plt.fill_between(steps, mean_cpu_util - std_cpu_util, mean_cpu_util + std_cpu_util, color="green", alpha=0.3)
 plt.title("CPU Utilization %")
 plt.ylim(0, 110)
 plt.ylabel("%")
 plt.grid(True)
 
-plt.subplot(2, 3, 3)
-plt.plot(steps, mean_qos, color="purple")
-plt.title("% Slices Meeting QoS")
+plt.subplot(3, 3, 3)
+plt.plot(steps, mean_mem_util, color="blue")
+plt.title("Memory Utilization %")
 plt.ylim(0, 110)
 plt.ylabel("%")
 plt.grid(True)
 
-plt.subplot(2, 3, 4)
-plt.plot(steps, mean_over, color="orange")
-plt.title("Over-provisioning %")
+plt.subplot(3, 3, 4)
+plt.plot(steps, mean_bw_util, color="cyan")
+plt.title("Bandwidth Utilization %")
+plt.ylim(0, 110)
 plt.ylabel("%")
 plt.grid(True)
 
-plt.subplot(2, 3, 5)
-plt.plot(steps, mean_active, color="red")
+plt.subplot(3, 3, 5)
+plt.plot(steps, mean_qos, color="purple")
+plt.title("% Slices Meeting All QoS")
+plt.ylim(0, 110)
+plt.ylabel("%")
+plt.grid(True)
+
+plt.subplot(3, 3, 6)
+plt.plot(steps, mean_cpu_over, color="orange")
+plt.title("CPU Over-provisioning %")
+plt.ylabel("%")
+plt.grid(True)
+
+plt.subplot(3, 3, 7)
+plt.plot(steps, mean_mem_over, color="red")
+plt.title("Memory Over-provisioning %")
+plt.ylabel("%")
+plt.grid(True)
+
+plt.subplot(3, 3, 8)
+plt.plot(steps, mean_bw_over, color="brown")
+plt.title("Bandwidth Over-provisioning %")
+plt.ylabel("%")
+plt.grid(True)
+
+plt.subplot(3, 3, 9)
+plt.plot(steps, mean_active, color="black")
 plt.title("Active Slices")
 plt.xlabel("Step")
 plt.ylim(0, MAX_SLICES + 1)
@@ -142,7 +220,11 @@ plt.show()
 # Print final average metrics
 print(f"Final average metrics over {num_episodes} episodes:")
 print(f"  Final cumulative reward       : {mean_reward[-1]:.1f} ± {std_reward[-1]:.1f}")
-print(f"  Final CPU utilization       : {mean_util[-1]:.1f}%")
-print(f"  Final QoS satisfied        : {mean_qos[-1]:.1f}%")
-print(f"  Final over-provisioning    : {mean_over[-1]:.1f}%")
-print(f"  Average active slices        : {mean_active[-1]:.1f}")
+print(f"  Final CPU utilization         : {mean_cpu_util[-1]:.1f}%")
+print(f"  Final memory utilization      : {mean_mem_util[-1]:.1f}%")
+print(f"  Final bandwidth utilization   : {mean_bw_util[-1]:.1f}%")
+print(f"  Final QoS satisfied           : {mean_qos[-1]:.1f}%")
+print(f"  Final CPU over-provisioning   : {mean_cpu_over[-1]:.1f}%")
+print(f"  Final memory over-provisioning: {mean_mem_over[-1]:.1f}%")
+print(f"  Final bandwidth over-provisioning: {mean_bw_over[-1]:.1f}%")
+print(f"  Average active slices         : {mean_active[-1]:.1f}")
