@@ -12,7 +12,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # ----------------------------- CONFIG -----------------------------
-MAX_SLICES = 10               # Increase later for real use
+MAX_SLICES = 50               # Maximum number of deployed network slice.
 NUM_NFS = 8                   # Fixed number of network functions per slice (changed from max/random)
 SLICE_FEATURE_DIM = 22        # Same as before for slice-level + QoS
 NF_FEATURE_DIM = 6            # Per NF: req_cpu, alloc_cpu, load_cpu, req_mem, alloc_mem, load_mem
@@ -20,9 +20,9 @@ NF_FEATURE_DIM = 6            # Per NF: req_cpu, alloc_cpu, load_cpu, req_mem, a
 
 class SimpleClusterSimulator:
     def __init__(self):
-        self.total_capacity_cpu = 200.0      # cores
-        self.total_capacity_mem = 1024.0     # GiB
-        self.total_capacity_bw = 1000.0      # MHz
+        self.total_capacity_cpu = 500.0      # cores
+        self.total_capacity_mem = 4096.0     # GiB
+        self.total_capacity_bw = 5000.0      # MHz
         self.active_slices: list[dict] = []
 
     def reset(self):
@@ -33,6 +33,10 @@ class SimpleClusterSimulator:
             return
         num_nfs = NUM_NFS  # Fixed to exactly 8
         nfs = []
+        # The req_cpu and req_mem are the minimum amount of resource that a Network Function needs to run.
+        # They set at the creation time and will not change during the running. They're like resources.requests.
+
+        # The alloc_cpu and alloc_mem are the current actual resources assigned to the Network Functions. They will change by Resource Allocation agent.
         for _ in range(num_nfs):
             req_cpu = random.uniform(0.5, 2.0)
             req_mem = random.uniform(2.0, 16.0)
