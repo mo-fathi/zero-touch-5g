@@ -1,0 +1,560 @@
+import gymnasium as gym
+from gymnasium.spaces import Dict as GymDict
+from gymnasium.spaces import Box
+import numpy as np
+import random
+from typing import Any
+
+
+
+
+
+class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: int = 8):
+
+    metadata = {"render_modes": []}
+
+    self.max_slices = max_slices
+    self.qos_params = qos_params
+    self.nf_num = nf_num
+    self.current_step = 0
+
+    # It comes from: 2 (cpu,mem) * 4 (request, limit, min, usage)
+    self.nf_feature_dim = 8
+
+    
+    # 2 comes from: (allocated BW and BW usage) per slice
+    self.ns_feature_dim = 2
+
+    def __init__(self):
+        super().__init__()
+
+        # Define Observation space for RA agent
+        self.observation_space = GymDict({
+            # Remaining Resource of the cluster (cpu, mem, and radio bandwidth)
+            # 6 shape as: (cpu_cap, cpu_used, mem_cap, mem_used, bw_cap, bw_used)
+            "cluster": Box(low=0.0, high=1e6, shape=(self.qos_params,), dtype=np.float32),
+
+            # QoS feature of Network slices
+            # qos_params (e.g. int_latency, ext_latency, int_throughput, ext_throughput, int_packet_loss, ext_packet_loss)
+            # qos_params * 2 for current and required for each one.
+            "QoS": Box(low=0.0, high=1e6, shape=(self.max_slices, self.qos_params * 2), dtype=np.float32),
+
+            # Network Function Resources Information of each network slice
+            "nf_features": Box(low=0.0, high=1e6, shape(self.max_slices, self.nf_num, self.nf_feature_dim), dtype=np.float32),
+
+            # Network Slice Resource Information (Bandwidth)
+            # TODO we can add number of UEs of network slices
+            "slice_fetures": Box(low=0.0, high=1e6, shape(self.max_slices, self.ns_feature_dim), dtype=np.float32),
+
+            # To show agent wich Network Slices are masked (does not exist)
+            "mask": Box(low=0, high=1, shape=(self.max_slices,), dtype=np.float32),
+
+        })
+
+        # Define Action Space for RA agent
+        action_dim = self.max_slices * (2 * self.nf_num + 1) # 2 (cpu/mem) + 1 BW
+        # Deltas for resources
+        # action = {slice_1_cpu_NF1, ..., slice_1_cpu_NFmax, slice_1_mem_NF1, ..., slice_1_mem_NFmax, slice_1_BW,
+        #           slice_2_cpu_NF1, ..., slice_2_cpu_NFmax, slice_2_mem_NF1, ..., slice_2_mem_NFmax, slice_2_BW,
+        #           ...
+        #           ...
+        #           ...
+        #           slice_max_cpu_NF1, ..., slice_max_cpu_NFmax, slice_max_mem_NF1, ..., slice_max_mem_NFmax, slice_max_BW}
+        self.action_space = Box (low=-5, high=5.0, shape(action_dim,), dtype=np.float32)
+
+
+        # Create cluster simulator
+        self.simulator = ClusterSimulator(
+            max_slices = self.max_slices,
+            nf_num = self.nf_num
+        )
+
+
+    def reset(self):
+        super.reset()
+
+        self.current_step = 0
+        self.simulator.reset()
+
+        initial_slices = random.randint(2, self.max_slices // 2 + 1)
+        for _ in range(initial_slices):
+            self.simulator.add_slice()
+        self.simulator.update_loads()
+
+        return self._get_obs(), {}
+
+    def step(self, action: np.ndarray):
+        reward = 0.0
+        terminated = False
+        truncated = False
+        info: dict[str, Any] = {}
+
+        
+        active = len(self.simulator.active_slices)
+
+        # Unpack and mask actions
+        cpu_deltas = np.zeros((self.max_slices, self.nf_num))
+        mem_deltas = np.zeros((self.max_slices, self.nf_num))
+        bw_deltas = np.zeros(self.max_slices)
+
+        idx = 0
+        for i in range(self.max_slices):
+            cpu_deltas[i] = action[idx:idx + self.nf_num]
+            idx += self.nf_num
+            mem_deltas[i] = action[idx:idx + self.nf_num]
+            idx += self.nf_num
+            bw_deltas[i] = action[idx]
+            idx += 1
+
+        mask_vec = np.zeros(self.max_slices)
+        mask_vec[:active] = 1.0
+        for i in range(self.max_slices):
+            if mask_vec[i] == 0:
+                cpu_deltas[i] = 0
+                mem_deltas[i] = 0
+                bw_deltas[i] = 0
+
+        for i in range(active):
+            self.simulator.apply_delta(i, cpu_deltas[i], mem_deltas[i], bw_deltas[i])
+
+        # Dynamic arrival/departure
+        # TODO make it better, for example base on time
+        if random.random() < 0.07 and active < self.max_slices:
+            self.simulator.add_slice()
+        if random.random() < 0.04 and active > 1:
+            self.simulator.remove_slice()
+
+        self.simulator.update_loads()
+
+        reward = self._compute_reward()
+        info["active_slices"] = len(self.simulator.active_slices)
+
+        self.current_step += 1
+        if self.current_step >= 1000:
+            terminated = True
+
+        obs = self._get_obs()
+        return obs, reward, terminated, truncated, info
+    
+    def _get_obs(self):
+
+        cluster = np.zeros(qos_params, dtype=np.float32)
+        qos = np.zeros(self.max_slices, slef.qos_params * 2, dtype=np.float32)
+        nf_features = np.zeros((self.max_slices, self.nf_num, self.nf_feature_dim), dtype=np.float32)
+        slice_features  = np.zeros((self.max_slices, self.ns_feature_dim), dtype=float32) 
+        mask = np.zeros(self.max_slices, dtype=float32)
+        
+
+        active = len(self.simulator.active_slices)
+        mask[:active] = 1.0
+
+        used_cpu = used_mem = used_bw = 0.0
+
+        for i in range(active):
+            # TODO check this
+            s = self.simulator.active_slices[i]
+            num_nfs = len(s["nfs"])
+            # nf_mask[i, :num_nfs] = 1.0
+
+            total_req_cpu = total_limit_cpu = total_min_cpu = total_used_cpu = 0.0
+            total_req_mem = total_limit_mem = total_min_mem = total_used_mem = 0.0
+
+            for j in range(num_nfs):
+                nf = s["nfs"][j]
+                nf_features[i, j] = np.array([
+                    nf["requested_cpu"],
+                    nf["limited_cpu"],
+                    nf["min_cpu"],
+                    nf["cpu_usage"],
+                    nf["requested_mem"],
+                    nf["limited_mem"],
+                    nf["min_mem"],
+                    nf["mem_usage"],
+                ], dtype=np.float32)
+
+                total_req_cpu += nf["requested_cpu"]
+                total_limit_cpu += nf["limited_cpu"]
+                total_min_cpu += nf["min_cpu"]
+                total_used_cpu += nf["cpu_usage"]
+                total_req_mem += nf["requested_mem"]
+                total_limit_mem += nf["limited_mem"]
+                total_min_mem += nf["min_mem"]
+                total_used_mem += nf["mem_usage"]
+
+                used_cpu += max(nf["cpu_usage"], nf["requested_cpu"])
+                used_mem += max(nf["mem_usage"], nf["requested_mem"])
+
+            used_bw += max(s["bw_usage"], s["allocated_bw"])
+
+            # Internal QoS
+            int_latency = s["target_int_latency_ms"] * (total_used_cpu / max(total_alloc_cpu, 0.1))
+            int_loss = max(0.0, total_used_cpu - total_alloc_cpu) / max(total_used_cpu, 0.1)
+            int_throughput = total_alloc_cpu * 10.0
+
+            # External QoS
+            ext_latency = s["target_ext_latency_ms"] * (s["load_bw"] / max(s["allocated_bw"], 0.1)) * (total_used_cpu / max(total_alloc_cpu, 0.1))
+            ext_loss = max(0.0, s["load_bw"] - s["allocated_bw"]) / max(s["load_bw"], 0.1)
+            ext_throughput = s["allocated_bw"] * 5.0
+
+            slice_features[i] = np.array([
+                s["allocated_bw"],
+                s["bw_usage"],
+            ], dtype=np.float32)
+
+        cluster = np.array([
+            self.simulator.total_capacity_cpu,
+            used_cpu,
+            self.simulator.total_capacity_mem,
+            used_mem,
+            self.simulator.total_capacity_bw,
+            used_bw,
+        ], dtype=np.float32)
+
+        qos = np.array([
+                int_latency,
+                int_loss,
+                int_throughput,
+                ext_latency,
+                ext_loss,
+                ext_throughput,
+                s["target_int_latency_ms"],
+                s["target_int_loss"],
+                s["target_int_throughput"],
+                s["target_ext_latency_ms"],
+                s["target_ext_loss"],
+                s["target_ext_throughput"],
+        ], dtype=np.float32)
+
+        return {
+            "cluster": cluster
+            "QoS": qos,
+            "nf_features": nf_features,
+            "slice_features": slice_features,
+            "mask": mask,
+        }
+        
+    def _compute_reward(self):
+        reward = 0.0
+        
+        # get QoS parameters
+
+        qos = self.simulate_qos(self.simulator.active_slices)
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        total_used_cpu = total_allocated_cpu = total_used_mem = total_allocated_mem = total_used_bw = total_allocated_bw = 0.0
+        total_cpu_violation = total_mem_violation = total_bw_violation = 0.0
+        total_cpu_over = total_mem_over = total_bw_over = 0.0
+
+        for s in self.simulator.active_slices:
+            total_load_cpu = total_alloc_cpu = total_load_mem = total_alloc_mem = 0.0
+            cpu_ov = mem_ov = 0.0
+
+            for nf in s["nfs"]:
+                cpu_ov += max(0.0, nf["allocated_cpu"] - nf["cpu_load"] * 1.4)
+                mem_ov += max(0.0, nf["allocated_mem"] - nf["mem_load"] * 1.4)
+
+                total_load_cpu += nf["cpu_load"]
+                total_alloc_cpu += nf["allocated_cpu"]
+                total_load_mem += nf["mem_load"]
+                total_alloc_mem += nf["allocated_mem"]
+
+                total_used_cpu += min(nf["cpu_load"], nf["allocated_cpu"])
+                total_allocated_cpu += nf["allocated_cpu"]
+                total_used_mem += min(nf["mem_load"], nf["allocated_mem"])
+                total_allocated_mem += nf["allocated_mem"]
+
+
+            # Compute Reward/Penalty based on QoS
+            qos_ok = all(qos["qos_satisfied"])
+
+            if qos_ok:
+                reward += 25.0
+            else:
+                reward -= 40.0
+
+            # Specific QoS penalties
+            if not qos["qos_satisfied"]["int_latency"]:
+                reward -= 10.0 * (qos["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
+            if not qos["qos_satisfied"]["int_loss"]:
+                reward -= 5.0 * (qos["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
+            if not qos["qos_satisfied"]["int_throughput"]:
+                reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos["int_throughput"]) / s["target_int_throughput"]
+            if not qos["qos_satisfied"]["ext_latency"]:
+                reward -= 10.0 * (qos["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
+            if not qos["qos_satisfied"]["ext_loss"]:
+                reward -= 5.0 * (qos["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
+            if not qos["qos_satisfied"]["ext_throughput"]:
+                reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos["ext_throughput"]) / s["target_ext_throughput"]
+
+
+            # Compute Reward/Penalty based on resource over-allocations
+            reward -= 10.0 * cpu_viol
+            reward -= 2.0 * mem_viol
+            reward -= 5.0 * bw_viol
+            reward -= 0.6 * cpu_ov
+            reward -= 0.3 * mem_ov
+            reward -= 0.4 * bw_ov
+
+        # Global efficiency bonuses
+        if total_allocated_cpu > 0:
+            cpu_util = total_used_cpu / total_allocated_cpu
+            reward += 20.0 * cpu_util
+        if total_allocated_mem > 0:
+            mem_util = total_used_mem / total_allocated_mem
+            reward += 10.0 * mem_util
+        if total_allocated_bw > 0:
+            bw_util = total_used_bw / total_allocated_bw
+            reward += 15.0 * bw_util
+
+        # Global over-allocation penalties
+        cpu_excess = max(0.0, total_allocated_cpu - self.simulator.total_capacity_cpu)
+        mem_excess = max(0.0, total_allocated_mem - self.simulator.total_capacity_mem)
+        bw_excess = max(0.0, total_allocated_bw - self.simulator.total_capacity_bw)
+        reward -= 100.0 * (cpu_excess + mem_excess + bw_excess)
+
+        # Small holding costs
+        reward -= 0.03 * total_allocated_cpu
+        reward -= 0.01 * total_allocated_mem
+        reward -= 0.02 * total_allocated_bw
+
+        return reward
+
+        
+    def _get_info(self):
+        pass
+    
+    def simulate_qos(self, slices):
+        """
+        Simulates QoS parameters for network slices based on resource allocations.
+        
+        Args:
+        slices (list of dict): Each dict represents a slice with:
+            - 'allocated_bw': Allocated bandwidth (bps)
+            - 'bw_usage': Bandwidth usage (bps)
+            - 'target_int_latency_ms': Target internal latency (ms)
+            - 'target_int_loss': Target internal loss (0-1)
+            - 'target_int_throughput': Target internal throughput (bps)
+            - 'target_ext_latency_ms': Target external latency (ms)
+            - 'target_ext_loss': Target external loss (0-1)
+            - 'target_ext_throughput': Target external throughput (bps)
+            - 'nfs': list of dicts, each NF with:
+                - 'requested_cpu': Requested CPU (cores)
+                - 'limited_cpu': Limited CPU (cores)
+                - 'min_cpu': Minimum CPU (cores)
+                - 'cpu_usage': CPU usage (cores)
+                - 'requested_mem': Requested memory (MB)
+                - 'limited_mem': Limited memory (MB)
+                - 'min_mem': Minimum memory (MB)
+                - 'mem_usage': Memory usage (MB)
+        
+        Returns:
+        list of dict: Each dict with computed QoS for the slice and satisfaction status.
+        """
+        
+        # Constants (adjust based on your simulation)
+        CPU_CLOCK_SPEED_GHZ = 2.0  # CPU frequency
+        CYCLES_PER_PACKET = 2000   # Cycles needed to process one packet
+        PACKET_SIZE_BYTES = 1500   # Average packet size
+        BUFFER_FRACTION = 0.7      # Fraction of memory for buffers
+        MISS_LATENCY_MS = 0.5      # Memory miss latency
+        PROPAGATION_DELAY_MS = 5   # Base propagation delay
+        EFFICIENCY_FACTOR = 0.9    # Bandwidth efficiency
+        BASE_LOSS = 0.001          # Base wireless loss
+        HIGH_LATENCY_PENALTY = 1000  # Penalty for overload (ms)
+        
+        results = []
+        
+        for s in slices:
+            allocated_bw = s['allocated_bw']
+            bw_usage = s['bw_usage']
+            nfs = s['nfs']
+            
+            # External QoS (bandwidth-driven)
+            ext_throughput = min(allocated_bw, bw_usage) * EFFICIENCY_FACTOR
+            
+            transmission_delay_sec = (PACKET_SIZE_BYTES * 8) / allocated_bw if allocated_bw > 0 else HIGH_LATENCY_PENALTY / 1000
+            if bw_usage < allocated_bw:
+                queuing_delay_sec = 1 / (allocated_bw - bw_usage) if (allocated_bw - bw_usage) > 0 else HIGH_LATENCY_PENALTY / 1000
+            else:
+                queuing_delay_sec = HIGH_LATENCY_PENALTY / 1000
+            ext_latency = PROPAGATION_DELAY_MS + 1000 * (transmission_delay_sec + queuing_delay_sec)
+            
+            if bw_usage <= allocated_bw:
+                ext_loss = BASE_LOSS
+            else:
+                ext_loss = (bw_usage - allocated_bw) / bw_usage + BASE_LOSS
+            
+            # Internal QoS (aggregate over NFs)
+            int_throughput = float('inf')
+            int_latency = 0.0
+            int_loss = 0.0  # We'll average losses
+            
+            for nf in nfs:
+                # Effective allocations
+                effective_cpu = max(nf['min_cpu'], min(nf['requested_cpu'], nf['limited_cpu']))
+                effective_mem = max(nf['min_mem'], min(nf['requested_mem'], nf['limited_mem']))
+                
+                # Service rate μ (packets/sec)
+                mu = (effective_cpu * CPU_CLOCK_SPEED_GHZ * 1e9) / CYCLES_PER_PACKET
+                
+                # Adjust for overload
+                if nf['cpu_usage'] > effective_cpu:
+                    mu *= (effective_cpu / nf['cpu_usage'])
+                
+                # Arrival rate λ (from bw_usage, assume slice bw_usage is input rate)
+                lambda_rate = bw_usage / (PACKET_SIZE_BYTES * 8)  # packets/sec
+                
+                # Throughput per NF
+                nf_throughput = min(mu * (PACKET_SIZE_BYTES * 8), bw_usage)  # bps
+                if nf['mem_usage'] > effective_mem:
+                    nf_throughput *= (effective_mem / nf['mem_usage'])
+                int_throughput = min(int_throughput, nf_throughput)
+                
+                # Latency per NF
+                processing_delay_sec = (PACKET_SIZE_BYTES * 8) / (mu * (PACKET_SIZE_BYTES * 8)) if mu > 0 else HIGH_LATENCY_PENALTY / 1000
+                if lambda_rate < mu:
+                    queuing_delay_sec = 1 / (mu - lambda_rate)
+                else:
+                    queuing_delay_sec = HIGH_LATENCY_PENALTY / 1000
+                
+                stall_delay_ms = 0
+                if nf['mem_usage'] > 0.8 * effective_mem:
+                    miss_rate = max(0, (nf['mem_usage'] - effective_mem) / nf['mem_usage'])
+                    stall_delay_ms = miss_rate * MISS_LATENCY_MS
+                
+                nf_latency = 1000 * (processing_delay_sec + queuing_delay_sec) + stall_delay_ms
+                int_latency += nf_latency
+                
+                # Loss per NF (approximate M/M/1/K)
+                buffer_size_packets = (effective_mem * BUFFER_FRACTION * 1e6 * 8) / (PACKET_SIZE_BYTES * 8)  # bits to packets
+                K = max(1, int(buffer_size_packets))
+                rho = lambda_rate / mu if mu > 0 else 1
+                if rho != 1:
+                    loss = (rho ** K * (1 - rho)) / (1 - rho ** (K + 1))
+                else:
+                    loss = 1 / (K + 1)
+                if nf['cpu_usage'] > effective_cpu or nf['mem_usage'] > effective_mem:
+                    overload_loss = max(0, max((nf['cpu_usage'] - effective_cpu) / nf['cpu_usage'], (nf['mem_usage'] - effective_mem) / nf['mem_usage']))
+                    loss = min(1, loss + overload_loss)
+                int_loss += loss / len(nfs)  # Average
+            
+            # Add base propagation to int_latency
+            int_latency += PROPAGATION_DELAY_MS
+            
+            # Check satisfaction
+            qos_satisfied = {
+                'int_latency': int_latency <= s['target_int_latency_ms'],
+                'int_loss': int_loss <= s['target_int_loss'],
+                'int_throughput': int_throughput >= s['target_int_throughput'],
+                'ext_latency': ext_latency <= s['target_ext_latency_ms'],
+                'ext_loss': ext_loss <= s['target_ext_loss'],
+                'ext_throughput': ext_throughput >= s['target_ext_throughput']
+            }
+            
+            results.append({
+                'int_latency': int_latency,
+                'int_loss': int_loss,
+                'int_throughput': int_throughput,
+                'ext_latency': ext_latency,
+                'ext_loss': ext_loss,
+                'ext_throughput': ext_throughput,
+                'qos_satisfied': qos_satisfied
+            })
+        
+        return results
+
+    
+
+
+class ClusterSimulator(max_slices: int = 10, nf_num: int = 8):
+
+    self.max_slices = max_slices
+    self.nf_num = nf_num
+
+    def __init__(self):
+        self.total_capacity_cpu = 500.0      # cores
+        self.total_capacity_mem = 4096.0     # GiB
+        self.total_capacity_bw = 5000.0      # MHz
+        self.active_slices: list[dict] = []
+
+    def reset(self):
+        self.active_slices.clear()
+
+    def add_slice(self):
+        if len(self.active_slices) >= self.max_slices:
+            return
+        nfs = []
+        # The min_cpu and min_mem are the minimum amount of resource that a Network Function needs to run.
+        # They set at the creation time and will not change during the running. They're like resources.requests.
+
+        # The requested_cpu and requested_mem are the current actual resources assigned to the Network Functions. They will change by Resource Allocation agent.
+        # The limited_cpu and limited_mem are the maximum resources that a Network Function can use. They're like resources.limits. They will also change by Resource Allocation agent.
+        # In this simulation the limited_cpu and limited_mem are coefficient * requested_cpu and requested_mem respectively.
+        for _ in range(self.nf_num):
+            min_cpu = random.uniform(0.5, 2.0)
+            min_mem = random.uniform(2.0, 16.0)
+            requested_cpu = random.uniform(1.0, 4.0)
+            requested_mem = random.uniform(4.0, 32.0)
+            limited_cpu = requested_cpu * random.uniform(1.2, 1.5)
+            limited_mem = requested_mem * random.uniform(1.2, 1.5)
+            cpu_usage = random.uniform(min_cpu, limited_cpu)
+            mem_usage = random.uniform(min_mem, limited_mem)
+            nfs.append({
+                "min_cpu": min_cpu,
+                "min_mem": min_mem,
+                "requested_cpu": requested_cpu,
+                "requested_mem": requested_mem,
+                "limited_cpu": limited_cpu,
+                "limited_mem": limited_mem,
+                "cpu_usage": cpu_usage,
+                "mem_usage": mem_usage,
+            })
+
+        min_bw = random.uniform(20.0, 70.0)
+        allocated_bw = random.uniform(min_bw, 150.0)
+        bw_usage = random.uniform(min_bw, allocated_bw)
+        self.active_slices.append({
+            "nfs": nfs,
+            "min_bw": min_bw,
+            "allocated_bw": allocated_bw,
+            "bw_usage": bw_usage,
+            "target_int_latency_ms": random.uniform(5.0, 20.0),
+            "target_int_loss": random.uniform(0.001, 0.01),
+            "target_int_throughput": random.uniform(100.0, 500.0),  # Mbps
+            "target_ext_latency_ms": random.uniform(10.0, 50.0),
+            "target_ext_loss": random.uniform(0.001, 0.01),
+            "target_ext_throughput": random.uniform(50.0, 200.0),  # Mbps
+        })
+
+    def remove_slice(self, idx: int | None = None):
+        if not self.active_slices:
+            return
+        if idx is None:
+            idx = random.randint(0, len(self.active_slices) - 1)
+        del self.active_slices[idx]
+
+    def update_loads(self):
+        # Simulate changes in resource usage for each slice and its NFs
+        for s in self.active_slices:
+            for nf in s["nfs"]:
+                nf["cpu_usage"] = np.clip(nf["cpu_usage"] + random.gauss(0, 0.2), nf["min_cpu"], nf["limited_cpu"])
+                nf["mem_usage"] = np.clip(nf["mem_usage"] + random.gauss(0, 1.0), nf["min_mem"], nf["limited_mem"])
+            s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), nf["min_bw"], nf["allocated_bw"])
+
+    def apply_delta(self, idx: int, cpu_deltas: np.ndarray, mem_deltas: np.ndarray, delta_bw: float):
+        # Apply resource allocation deltas to the specified slice
+        # TODO limit clipping based on total capacity
+        if 0 <= idx < len(self.active_slices):
+            s = self.active_slices[idx]
+            for j in range(self.nf_num):
+                nf = s["nfs"][j]
+                nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, np.inf)
+                nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, np.inf)
+            s["allocated_bw"] = np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw)

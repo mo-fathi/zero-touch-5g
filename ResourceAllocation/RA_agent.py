@@ -441,14 +441,23 @@ if __name__ == "__main__":
         "MultiInputPolicy",
         env,
         policy_kwargs=policy_kwargs,
+        #  learning rate for adam optimizer, 
+        #the same learning rate will be used for all networks (Q-Values, Actor and Value function) 
+        #it can be a function of the current progress remaining (from 1 to 0)
         learning_rate=3e-4,
         buffer_size=500_000,
         learning_starts=5_000,
+        # Minibatch size for each gradient update
         batch_size=256,
+        #  the soft update coefficient (“Polyak update”, between 0 and 1)
         tau=0.005,
+        # the discount factor
         gamma=0.99,
+        #  Update the model every train_freq steps. Alternatively pass a tuple of frequency and unit like (5, "step") or (2, "episode").
         train_freq=1,
+        # How many gradient steps to do after each rollout (see train_freq) Set to -1 means to do as many gradient steps as steps done in the environment during the rollout.
         gradient_steps=1,
+        #  Entropy regularization coefficient. (Equivalent to inverse of reward scale in the original SAC paper.) Controlling exploration/exploitation trade-off. Set it to ‘auto’ to learn it automatically
         ent_coef="auto",
         verbose=1,
         tensorboard_log="./sac_5g_logs",
