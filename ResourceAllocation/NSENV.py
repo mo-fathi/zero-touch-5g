@@ -421,6 +421,7 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, nf_num: int = 8, slice_feature_
             int_latency += PROPAGATION_DELAY_MS
             
             # Check satisfaction
+            # TODO consider some error margin for example 10%
             qos_satisfied = {
                 'int_latency': int_latency <= s['target_int_latency_ms'],
                 'int_loss': int_loss <= s['target_int_loss'],

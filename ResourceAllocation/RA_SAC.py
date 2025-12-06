@@ -10,7 +10,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from NSENV import NetSliceEnv
 
-
+from datetime import datetime
 # ----------------------------- CONFIG -----------------------------
 MAX_SLICES = 10               # Increase later for real use
 NUM_NFS = 8                   # Fixed number of network functions per slice
@@ -117,9 +117,12 @@ if __name__ == "__main__":
         device="auto",
     )
 
-    print("Starting training...")
+    timestamp = datetime.now().isoformat().replace(":", "-").split(".")[0]
+
+    print(f"Starting training at {timestamp}...")
+    
     model.learn(total_timesteps=400_000, progress_bar=True)
-    model.save("sac_5g_slice_agent.zip")
+    model.save(f"sac_5g_slice_agent-{timestamp}.zip")
 
     # Quick evaluation
     obs, _ = env.reset()

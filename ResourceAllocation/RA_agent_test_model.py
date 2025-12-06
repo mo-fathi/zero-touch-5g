@@ -2,10 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from stable_baselines3 import SAC
 
+from NSENV import NetSliceEnv
+
 # --------------------------------------------------------------
 # 1. Load the model (change the filename if you saved it differently)
 # --------------------------------------------------------------
-env = K8sSliceEnv(simulate=True)                     # same env class you used for training
+env = NetSliceEnv(simulate=True)                     # same env class you used for training
 model = SAC.load("sac_5g_slice_agent.zip", env=env)   # or "sac_5g_final" etc.
 
 # --------------------------------------------------------------
@@ -45,32 +47,32 @@ for ep in range(num_episodes):
         done = terminated or truncated
 
         # ---- Extract metrics from the simulator (safe because simulate=True) ----
-        total_cpu_load = total_cpu_alloc = total_mem_load = total_mem_alloc = total_bw_load = total_bw_alloc = 0.0
+        total_cpu_usage = total_cpu_alloc = total_mem_usage = total_mem_alloc = total_bw_load = total_bw_alloc = 0.0
         total_qos_ok = total_cpu_over = total_mem_over = total_bw_over = 0.0
         active = len(env.simulator.active_slices)
 
         for s in env.simulator.active_slices:
-            load_cpu = sum(nf["cpu_load"] for nf in s["nfs"])
-            load_mem = sum(nf["mem_load"] for nf in s["nfs"])
-            alloc_cpu = sum(nf["allocated_cpu"] for nf in s["nfs"])
-            alloc_mem = sum(nf["allocated_mem"] for nf in s["nfs"])
-            load_bw = s["load_bw"]
+            cpu_usage = sum(nf["cpu_usage"] for nf in s["nfs"])
+            mem_usage = sum(nf["mem_usage"] for nf in s["nfs"])
+            alloc_cpu = sum(nf["requested_cpu"] for nf in s["nfs"])
+            alloc_mem = sum(nf["requested_mem"] for nf in s["nfs"])
+            bw_usage = s["bw_usage"]
             alloc_bw = s["allocated_bw"]
 
-            total_cpu_load += load_cpu
+            total_cpu_usage += cpu_usage
             total_cpu_alloc += alloc_cpu
-            total_mem_load += load_mem
+            total_mem_usage += mem_usage
             total_mem_alloc += alloc_mem
-            total_bw_load += load_bw
+            total_bw_load += bw_usage
             total_bw_alloc += alloc_bw
 
             # QoS check (same logic as in reward function)
-            int_latency = s["target_int_latency_ms"] * (load_cpu / max(alloc_cpu, 0.1))
-            int_loss = max(0.0, load_cpu - alloc_cpu) / max(load_cpu, 0.1)
+            int_latency = s["target_int_latency_ms"] * (cpu_usage / max(alloc_cpu, 0.1))
+            int_loss = max(0.0, cpu_usage - alloc_cpu) / max(cpu_usage, 0.1)
             int_throughput = alloc_cpu * 10.0
 
-            ext_latency = s["target_ext_latency_ms"] * (load_bw / max(alloc_bw, 0.1)) * (load_cpu / max(alloc_cpu, 0.1))
-            ext_loss = max(0.0, load_bw - alloc_bw) / max(load_bw, 0.1)
+            ext_latency = s["target_ext_latency_ms"] * (bw_usage / max(alloc_bw, 0.1)) * (cpu_usage / max(alloc_cpu, 0.1))
+            ext_loss = max(0.0, bw_usage - alloc_bw) / max(bw_usage, 0.1)
             ext_throughput = alloc_bw * 5.0
 
             int_lat_ok = int_latency <= s["target_int_latency_ms"] * 1.1
@@ -84,12 +86,12 @@ for ep in range(num_episodes):
             total_qos_ok += 1 if qos_ok else 0
 
             # Over-provisioning (extra resources beyond 40% headroom)
-            total_cpu_over += max(0.0, alloc_cpu - load_cpu * 1.4)
-            total_mem_over += max(0.0, alloc_mem - load_mem * 1.4)
-            total_bw_over += max(0.0, alloc_bw - load_bw * 1.4)
+            total_cpu_over += max(0.0, alloc_cpu - cpu_usage * 1.4)
+            total_mem_over += max(0.0, alloc_mem - mem_usage * 1.4)
+            total_bw_over += max(0.0, alloc_bw - bw_usage * 1.4)
 
-        cpu_utilization = (total_cpu_load / total_cpu_alloc * 100) if total_cpu_alloc > 0 else 0
-        mem_utilization = (total_mem_load / total_mem_alloc * 100) if total_mem_alloc > 0 else 0
+        cpu_utilization = (total_cpu_usage / total_cpu_alloc * 100) if total_cpu_alloc > 0 else 0
+        mem_utilization = (total_mem_usage / total_mem_alloc * 100) if total_mem_alloc > 0 else 0
         bw_utilization = (total_bw_load / total_bw_alloc * 100) if total_bw_alloc > 0 else 0
         qos_percent = (total_qos_ok / active * 100) if active > 0 else 100
         cpu_overprov = (total_cpu_over / total_cpu_alloc * 100) if total_cpu_alloc > 0 else 0
