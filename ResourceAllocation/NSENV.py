@@ -9,24 +9,22 @@ from typing import Any
 
 
 
-class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: int = 8):
+class NetSliceEnv(gym.Env, max_slices: int = 10, nf_num: int = 8, slice_feature_dim: int = 2, nf_feature_dim: int = 8, qos_params: int = 6):
 
     metadata = {"render_modes": []}
 
-    self.max_slices = max_slices
-    self.qos_params = qos_params
-    self.nf_num = nf_num
     self.current_step = 0
 
-    # It comes from: 2 (cpu,mem) * 4 (request, limit, min, usage)
-    self.nf_feature_dim = 8
-
-    
-    # 2 comes from: (allocated BW and BW usage) per slice
-    self.ns_feature_dim = 2
 
     def __init__(self):
         super().__init__()
+
+        self.max_slices = max_slices
+        self.nf_num = nf_num
+        self.ns_feature_dim = slice_feature_dim
+        # It comes from: 2 (cpu,mem) * 4 (request, limit, min, usage)
+        self.nf_feature_dim = nf_feature_dim
+        self.qos_params = qos_params
 
         # Define Observation space for RA agent
         self.observation_space = GymDict({
