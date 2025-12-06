@@ -233,39 +233,30 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: in
         reward = 0.0
         
         # get QoS parameters
-
         qos = self.simulate_qos(self.simulator.active_slices)
         
-        
-        
-        
-        
-        
-        
-        
-        
-        total_used_cpu = total_allocated_cpu = total_used_mem = total_allocated_mem = total_used_bw = total_allocated_bw = 0.0
-        total_cpu_violation = total_mem_violation = total_bw_violation = 0.0
+        # total_used_cpu and total_used_mem are sum of max(usage, requested) for each NF
+        # total_requested_cpu and total_requested_mem are sum of requested for each NF
+        # total_used_bw is sum of used bw for each slice
+        # total_allocated_bw is sum of allocated bw for each slice
+        total_used_cpu = total_requested_cpu = total_used_mem = total_requested_mem = total_used_bw = total_allocated_bw = 0.0
+
+        # Violations and over-allocations
         total_cpu_over = total_mem_over = total_bw_over = 0.0
 
         for s in self.simulator.active_slices:
-            total_load_cpu = total_alloc_cpu = total_load_mem = total_alloc_mem = 0.0
-            cpu_ov = mem_ov = 0.0
 
             for nf in s["nfs"]:
-                cpu_ov += max(0.0, nf["allocated_cpu"] - nf["cpu_load"] * 1.4)
-                mem_ov += max(0.0, nf["allocated_mem"] - nf["mem_load"] * 1.4)
+                total_cpu_over += max(0.0, nf["requested_cpu"] - nf["cpu_usage"] )
+                total_mem_over += max(0.0, nf["requested_mem"] - nf["mem_usage"] )
 
-                total_load_cpu += nf["cpu_load"]
-                total_alloc_cpu += nf["allocated_cpu"]
-                total_load_mem += nf["mem_load"]
-                total_alloc_mem += nf["allocated_mem"]
+                total_used_cpu += max(nf["cpu_usage"], nf["requested_cpu"])
+                total_requested_cpu += nf["requested_cpu"]
+                total_used_mem += max(nf["mem_usage"], nf["requested_mem"])
+                total_requested_mem += nf["requested_mem"]
 
-                total_used_cpu += min(nf["cpu_load"], nf["allocated_cpu"])
-                total_allocated_cpu += nf["allocated_cpu"]
-                total_used_mem += min(nf["mem_load"], nf["allocated_mem"])
-                total_allocated_mem += nf["allocated_mem"]
-
+            total_used_bw += s["bw_usage"]
+            total_allocated_bw += s["allocated_bw"]
 
             # Compute Reward/Penalty based on QoS
             qos_ok = all(qos["qos_satisfied"])
@@ -290,32 +281,19 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: in
                 reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos["ext_throughput"]) / s["target_ext_throughput"]
 
 
-            # Compute Reward/Penalty based on resource over-allocations
-            reward -= 10.0 * cpu_viol
-            reward -= 2.0 * mem_viol
-            reward -= 5.0 * bw_viol
-            reward -= 0.6 * cpu_ov
-            reward -= 0.3 * mem_ov
-            reward -= 0.4 * bw_ov
-
         # Global efficiency bonuses
-        if total_allocated_cpu > 0:
-            cpu_util = total_used_cpu / total_allocated_cpu
+        # TODO prevent to assign requested < usage
+        if total_requested_cpu > 0:
+            cpu_util = total_used_cpu / total_requested_cpu
             reward += 20.0 * cpu_util
-        if total_allocated_mem > 0:
-            mem_util = total_used_mem / total_allocated_mem
+        if total_requested_mem > 0:
+            mem_util = total_used_mem / total_requested_mem
             reward += 10.0 * mem_util
         if total_allocated_bw > 0:
             bw_util = total_used_bw / total_allocated_bw
             reward += 15.0 * bw_util
 
-        # Global over-allocation penalties
-        cpu_excess = max(0.0, total_allocated_cpu - self.simulator.total_capacity_cpu)
-        mem_excess = max(0.0, total_allocated_mem - self.simulator.total_capacity_mem)
-        bw_excess = max(0.0, total_allocated_bw - self.simulator.total_capacity_bw)
-        reward -= 100.0 * (cpu_excess + mem_excess + bw_excess)
-
-        # Small holding costs
+        # Penalties for cost of allocations
         reward -= 0.03 * total_allocated_cpu
         reward -= 0.01 * total_allocated_mem
         reward -= 0.02 * total_allocated_bw
