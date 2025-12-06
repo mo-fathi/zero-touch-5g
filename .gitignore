@@ -1,2 +1,5 @@
 venv/
 sac_5g_logs/
+ResourceAllocation/*.zip
+ResourceAllocation/__pycache__/
+ResourceAllocation/*.png
