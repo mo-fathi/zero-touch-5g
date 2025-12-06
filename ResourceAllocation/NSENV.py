@@ -149,9 +149,11 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: in
         mask[:active] = 1.0
 
         used_cpu = used_mem = used_bw = 0.0
+        
+
+        simulated_qos = self.simulate_qos(self.simulator.active_slices) 
 
         for i in range(active):
-            # TODO check this
             s = self.simulator.active_slices[i]
             num_nfs = len(s["nfs"])
             # nf_mask[i, :num_nfs] = 1.0
@@ -186,15 +188,22 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: in
 
             used_bw += max(s["bw_usage"], s["allocated_bw"])
 
-            # Internal QoS
-            int_latency = s["target_int_latency_ms"] * (total_used_cpu / max(total_alloc_cpu, 0.1))
-            int_loss = max(0.0, total_used_cpu - total_alloc_cpu) / max(total_used_cpu, 0.1)
-            int_throughput = total_alloc_cpu * 10.0
+            slice_qos = np.array([
+                    simulated_qos[i]["int_latency"],
+                    simulated_qos[i]["int_loss"],
+                    simulated_qos[i]["int_throughput"],
+                    simulated_qos[i]["ext_latency"],
+                    simulated_qos[i]["ext_loss"],
+                    simulated_qos[i]["ext_throughput"],
+                    s["target_int_latency_ms"],
+                    s["target_int_loss"],
+                    s["target_int_throughput"],
+                    s["target_ext_latency_ms"],
+                    s["target_ext_loss"],
+                    s["target_ext_throughput"],
+            ], dtype=np.float32)
 
-            # External QoS
-            ext_latency = s["target_ext_latency_ms"] * (s["load_bw"] / max(s["allocated_bw"], 0.1)) * (total_used_cpu / max(total_alloc_cpu, 0.1))
-            ext_loss = max(0.0, s["load_bw"] - s["allocated_bw"]) / max(s["load_bw"], 0.1)
-            ext_throughput = s["allocated_bw"] * 5.0
+            qos[i] = slice_qos
 
             slice_features[i] = np.array([
                 s["allocated_bw"],
@@ -210,20 +219,7 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, qos_params: int = 6, nf_num: in
             used_bw,
         ], dtype=np.float32)
 
-        qos = np.array([
-                int_latency,
-                int_loss,
-                int_throughput,
-                ext_latency,
-                ext_loss,
-                ext_throughput,
-                s["target_int_latency_ms"],
-                s["target_int_loss"],
-                s["target_int_throughput"],
-                s["target_ext_latency_ms"],
-                s["target_ext_loss"],
-                s["target_ext_throughput"],
-        ], dtype=np.float32)
+
 
         return {
             "cluster": cluster
