@@ -9,14 +9,14 @@ from typing import Any
 
 
 
-class NetSliceEnv(gym.Env, max_slices: int = 10, nf_num: int = 8, slice_feature_dim: int = 2, nf_feature_dim: int = 8, qos_params: int = 6):
+class NetSliceEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
     self.current_step = 0
 
 
-    def __init__(self):
+    def __init__(self, max_slices: int = 10, nf_num: int = 8, slice_feature_dim: int = 2, nf_feature_dim: int = 8, qos_params: int = 6):
         super().__init__()
 
         self.max_slices = max_slices
@@ -446,16 +446,18 @@ class NetSliceEnv(gym.Env, max_slices: int = 10, nf_num: int = 8, slice_feature_
     
 
 
-class ClusterSimulator(max_slices: int = 10, nf_num: int = 8):
+class ClusterSimulator():
 
-    self.max_slices = max_slices
-    self.nf_num = nf_num
 
-    def __init__(self):
-        self.total_capacity_cpu = 500.0      # cores
-        self.total_capacity_mem = 4096.0     # GiB
-        self.total_capacity_bw = 5000.0      # MHz
+    def __init__(self, max_slices: int = 10, nf_num: int = 8):
+        self.total_capacity_cpu = 200.0      # cores
+        self.total_capacity_mem = 1024.0     # GiB
+        self.total_capacity_bw = 1000.0      # MHz
         self.active_slices: list[dict] = []
+
+        self.max_slices = max_slices
+        self.nf_num = nf_num
+
 
     def reset(self):
         self.active_slices.clear()
