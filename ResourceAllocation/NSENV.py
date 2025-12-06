@@ -13,8 +13,6 @@ class NetSliceEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    self.current_step = 0
-
 
     def __init__(self, max_slices: int = 10, nf_num: int = 8, slice_feature_dim: int = 2, nf_feature_dim: int = 8, qos_params: int = 6):
         super().__init__()
@@ -25,6 +23,8 @@ class NetSliceEnv(gym.Env):
         # It comes from: 2 (cpu,mem) * 4 (request, limit, min, usage)
         self.nf_feature_dim = nf_feature_dim
         self.qos_params = qos_params
+        
+        self.current_step = 0
 
         # Define Observation space for RA agent
         self.observation_space = GymDict({
@@ -38,11 +38,11 @@ class NetSliceEnv(gym.Env):
             "QoS": Box(low=0.0, high=1e6, shape=(self.max_slices, self.qos_params * 2), dtype=np.float32),
 
             # Network Function Resources Information of each network slice
-            "nf_features": Box(low=0.0, high=1e6, shape(self.max_slices, self.nf_num, self.nf_feature_dim), dtype=np.float32),
+            "nf_features": Box(low=0.0, high=1e6, shape=(self.max_slices, self.nf_num, self.nf_feature_dim), dtype=np.float32),
 
             # Network Slice Resource Information (Bandwidth)
             # TODO we can add number of UEs of network slices
-            "slice_fetures": Box(low=0.0, high=1e6, shape(self.max_slices, self.ns_feature_dim), dtype=np.float32),
+            "slice_fetures": Box(low=0.0, high=1e6, shape=(self.max_slices, self.ns_feature_dim), dtype=np.float32),
 
             # To show agent wich Network Slices are masked (does not exist)
             "mask": Box(low=0, high=1, shape=(self.max_slices,), dtype=np.float32),
@@ -58,7 +58,7 @@ class NetSliceEnv(gym.Env):
         #           ...
         #           ...
         #           slice_max_cpu_NF1, ..., slice_max_cpu_NFmax, slice_max_mem_NF1, ..., slice_max_mem_NFmax, slice_max_BW}
-        self.action_space = Box (low=-5, high=5.0, shape(action_dim,), dtype=np.float32)
+        self.action_space = Box (low=-5, high=5.0, shape=(action_dim,), dtype=np.float32)
 
 
         # Create cluster simulator
@@ -220,7 +220,7 @@ class NetSliceEnv(gym.Env):
 
 
         return {
-            "cluster": cluster
+            "cluster": cluster,
             "QoS": qos,
             "nf_features": nf_features,
             "slice_features": slice_features,

@@ -78,7 +78,7 @@ if __name__ == "__main__":
     
     env = NetSliceEnv(
         max_slices=MAX_SLICES,
-        nunf_num=NUM_NFS,
+        nf_num=NUM_NFS,
         slice_feature_dim=SLICE_FEATURE_DIM,
         nf_feature_dim=NF_FEATURE_DIM,
         qos_params=QOS_PARAMS,
@@ -98,7 +98,7 @@ if __name__ == "__main__":
         #the same learning rate will be used for all networks (Q-Values, Actor and Value function) 
         #it can be a function of the current progress remaining (from 1 to 0)
         learning_rate=3e-4,
-        buffer_size=500_000,
+        buffer_size=125_000,
         learning_starts=5_000,
         # Minibatch size for each gradient update
         batch_size=256,
@@ -121,7 +121,7 @@ if __name__ == "__main__":
 
     print(f"Starting training at {timestamp}...")
     
-    model.learn(total_timesteps=400_000, progress_bar=True)
+    model.learn(total_timesteps=40_000, progress_bar=True)
     model.save(f"sac_5g_slice_agent-{timestamp}.zip")
 
     # Quick evaluation
