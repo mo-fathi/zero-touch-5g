@@ -42,7 +42,7 @@ class NetSliceEnv(gym.Env):
 
             # Network Slice Resource Information (Bandwidth)
             # TODO we can add number of UEs of network slices
-            "slice_fetures": Box(low=0.0, high=1e6, shape=(self.max_slices, self.ns_feature_dim), dtype=np.float32),
+            "slice_features": Box(low=0.0, high=1e6, shape=(self.max_slices, self.ns_feature_dim), dtype=np.float32),
 
             # To show agent wich Network Slices are masked (does not exist)
             "mask": Box(low=0, high=1, shape=(self.max_slices,), dtype=np.float32),
@@ -68,8 +68,8 @@ class NetSliceEnv(gym.Env):
         )
 
 
-    def reset(self):
-        super.reset()
+    def reset(self, *,  seed=None, options = None):
+        super().reset(seed=seed)
 
         self.current_step = 0
         self.simulator.reset()
@@ -136,11 +136,11 @@ class NetSliceEnv(gym.Env):
     
     def _get_obs(self):
 
-        cluster = np.zeros(qos_params, dtype=np.float32)
-        qos = np.zeros(self.max_slices, slef.qos_params * 2, dtype=np.float32)
+        cluster = np.zeros(self.qos_params, dtype=np.float32)
+        qos = np.zeros((self.max_slices, self.qos_params * 2), dtype=np.float32)
         nf_features = np.zeros((self.max_slices, self.nf_num, self.nf_feature_dim), dtype=np.float32)
-        slice_features  = np.zeros((self.max_slices, self.ns_feature_dim), dtype=float32) 
-        mask = np.zeros(self.max_slices, dtype=float32)
+        slice_features  = np.zeros((self.max_slices, self.ns_feature_dim), dtype=np.float32) 
+        mask = np.zeros(self.max_slices, dtype=np.float32)
         
 
         active = len(self.simulator.active_slices)
@@ -240,8 +240,10 @@ class NetSliceEnv(gym.Env):
         total_used_cpu = total_requested_cpu = total_used_mem = total_requested_mem = total_used_bw = total_allocated_bw = 0.0
 
         # Violations and over-allocations
+        # TODO using over provisioning parameters in reward
         total_cpu_over = total_mem_over = total_bw_over = 0.0
 
+        slice_idx = 0
         for s in self.simulator.active_slices:
 
             for nf in s["nfs"]:
@@ -257,7 +259,14 @@ class NetSliceEnv(gym.Env):
             total_allocated_bw += s["allocated_bw"]
 
             # Compute Reward/Penalty based on QoS
-            qos_ok = all(qos["qos_satisfied"])
+            qos_ok = all([
+                        qos[slice_idx]["qos_satisfied"]["int_latency"],
+                        qos[slice_idx]["qos_satisfied"]["int_loss"],
+                        qos[slice_idx]["qos_satisfied"]["int_throughput"],
+                        qos[slice_idx]["qos_satisfied"]["ext_latency"],
+                        qos[slice_idx]["qos_satisfied"]["ext_loss"],
+                        qos[slice_idx]["qos_satisfied"]["ext_throughput"]                 
+                        ])
 
             if qos_ok:
                 reward += 25.0
@@ -265,19 +274,20 @@ class NetSliceEnv(gym.Env):
                 reward -= 40.0
 
             # Specific QoS penalties
-            if not qos["qos_satisfied"]["int_latency"]:
-                reward -= 10.0 * (qos["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
-            if not qos["qos_satisfied"]["int_loss"]:
-                reward -= 5.0 * (qos["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
-            if not qos["qos_satisfied"]["int_throughput"]:
-                reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos["int_throughput"]) / s["target_int_throughput"]
-            if not qos["qos_satisfied"]["ext_latency"]:
-                reward -= 10.0 * (qos["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
-            if not qos["qos_satisfied"]["ext_loss"]:
-                reward -= 5.0 * (qos["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
-            if not qos["qos_satisfied"]["ext_throughput"]:
-                reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos["ext_throughput"]) / s["target_ext_throughput"]
+            if not qos[slice_idx]["qos_satisfied"]["int_latency"]:
+                reward -= 10.0 * (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
+            if not qos[slice_idx]["qos_satisfied"]["int_loss"]:
+                reward -= 5.0 * (qos[slice_idx]["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
+            if not qos[slice_idx]["qos_satisfied"]["int_throughput"]:
+                reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"]
+            if not qos[slice_idx]["qos_satisfied"]["ext_latency"]:
+                reward -= 10.0 * (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
+            if not qos[slice_idx]["qos_satisfied"]["ext_loss"]:
+                reward -= 5.0 * (qos[slice_idx]["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
+            if not qos[slice_idx]["qos_satisfied"]["ext_throughput"]:
+                reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"]
 
+            slice_idx += 1
 
         # Global efficiency bonuses
         # TODO prevent to assign requested < usage
@@ -292,8 +302,8 @@ class NetSliceEnv(gym.Env):
             reward += 15.0 * bw_util
 
         # Penalties for cost of allocations
-        reward -= 0.03 * total_allocated_cpu
-        reward -= 0.01 * total_allocated_mem
+        reward -= 0.03 * total_requested_cpu
+        reward -= 0.01 * total_requested_mem
         reward -= 0.02 * total_allocated_bw
 
         return reward
@@ -521,7 +531,7 @@ class ClusterSimulator():
             for nf in s["nfs"]:
                 nf["cpu_usage"] = np.clip(nf["cpu_usage"] + random.gauss(0, 0.2), nf["min_cpu"], nf["limited_cpu"])
                 nf["mem_usage"] = np.clip(nf["mem_usage"] + random.gauss(0, 1.0), nf["min_mem"], nf["limited_mem"])
-            s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), nf["min_bw"], nf["allocated_bw"])
+            s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), s["min_bw"], s["allocated_bw"])
 
     def apply_delta(self, idx: int, cpu_deltas: np.ndarray, mem_deltas: np.ndarray, delta_bw: float):
         # Apply resource allocation deltas to the specified slice
