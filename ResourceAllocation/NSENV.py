@@ -431,14 +431,13 @@ class NetSliceEnv(gym.Env):
             int_latency += PROPAGATION_DELAY_MS
             
             # Check satisfaction
-            # TODO consider some error margin for example 10%
             qos_satisfied = {
-                'int_latency': int_latency <= s['target_int_latency_ms'],
-                'int_loss': int_loss <= s['target_int_loss'],
-                'int_throughput': int_throughput >= s['target_int_throughput'],
-                'ext_latency': ext_latency <= s['target_ext_latency_ms'],
-                'ext_loss': ext_loss <= s['target_ext_loss'],
-                'ext_throughput': ext_throughput >= s['target_ext_throughput']
+                'int_latency': int_latency <= s['target_int_latency_ms'] * 1.1,
+                'int_loss': int_loss <= s['target_int_loss'] * 1.1,
+                'int_throughput': int_throughput >= s['target_int_throughput'] * 0.9,
+                'ext_latency': ext_latency <= s['target_ext_latency_ms'] * 1.1,
+                'ext_loss': ext_loss <= s['target_ext_loss'] * 1.1,
+                'ext_throughput': ext_throughput >= s['target_ext_throughput'] * 0.9,
             }
             
             results.append({
