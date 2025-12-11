@@ -3,7 +3,7 @@ from gymnasium.spaces import Dict as GymDict
 from gymnasium.spaces import Box
 import numpy as np
 import random
-from typing import Any
+from typing import Any,List, Dict
 import math
 
 
@@ -313,7 +313,7 @@ class NetSliceEnv(gym.Env):
     
 
 
-    def compute_slices_qos(slices: List[Dict]) -> List[Dict]:
+    def simulate_qos(self, slices) -> List[Dict]:
         """
         Compute internal and external QoS metrics for a list of slices.
 
