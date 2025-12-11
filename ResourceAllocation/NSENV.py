@@ -4,6 +4,7 @@ from gymnasium.spaces import Box
 import numpy as np
 import random
 from typing import Any
+import math
 
 
 
@@ -310,145 +311,240 @@ class NetSliceEnv(gym.Env):
     def _get_info(self):
         pass
     
-    def simulate_qos(self, slices):
+
+
+    def compute_slices_qos(slices: List[Dict]) -> List[Dict]:
         """
-        Simulates QoS parameters for network slices based on resource allocations.
-        
+        Compute internal and external QoS metrics for a list of slices.
+
         Args:
-        slices (list of dict): Each dict represents a slice with:
-            - 'allocated_bw': Allocated bandwidth (bps)
-            - 'bw_usage': Bandwidth usage (bps)
-            - 'target_int_latency_ms': Target internal latency (ms)
-            - 'target_int_loss': Target internal loss (0-1)
-            - 'target_int_throughput': Target internal throughput (bps)
-            - 'target_ext_latency_ms': Target external latency (ms)
-            - 'target_ext_loss': Target external loss (0-1)
-            - 'target_ext_throughput': Target external throughput (bps)
-            - 'nfs': list of dicts, each NF with:
-                - 'requested_cpu': Requested CPU (cores)
-                - 'limited_cpu': Limited CPU (cores)
-                - 'min_cpu': Minimum CPU (cores)
-                - 'cpu_usage': CPU usage (cores)
-                - 'requested_mem': Requested memory (MB)
-                - 'limited_mem': Limited memory (MB)
-                - 'min_mem': Minimum memory (MB)
-                - 'mem_usage': Memory usage (MB)
-        
+            slices (list of dict): Each dict represents a slice with:
+                - 'allocated_bw': Allocated bandwidth (bps)
+                - 'bw_usage': Bandwidth usage (bps)
+                - 'target_int_latency_ms': Target internal latency (ms)
+                - 'target_int_loss': Target internal loss (0-1)
+                - 'target_int_throughput': Target internal throughput (bps)
+                - 'target_ext_latency_ms': Target external latency (ms)
+                - 'target_ext_loss': Target external loss (0-1)
+                - 'target_ext_throughput': Target external throughput (bps)
+                - 'nfs': list of dicts, each NF with:
+                    - 'requested_cpu': Requested CPU (cores)
+                    - 'limited_cpu': Limited CPU (cores)
+                    - 'min_cpu': Minimum CPU (cores)
+                    - 'cpu_usage': CPU usage (cores)
+                    - 'requested_mem': Requested memory (MB)
+                    - 'limited_mem': Limited memory (MB)
+                    - 'min_mem': Minimum memory (MB)
+                    - 'mem_usage': Memory usage (MB)
+
         Returns:
-        list of dict: Each dict with computed QoS for the slice and satisfaction status.
+            list of dict: Each dict with computed QoS and satisfaction flags:
+                - 'int_latency_ms', 'int_loss', 'int_throughput_bps'
+                - 'ext_latency_ms', 'ext_loss', 'ext_throughput_bps'
+                - 'int_sla_ok' (bool), 'ext_sla_ok' (bool)
+                - 'per_nf' : list of per-NF diagnostics (mu, lambda, rho, P_block, T_ms, throughput_bps)
         """
-        
-        # Constants (adjust based on your simulation)
-        CPU_CLOCK_SPEED_GHZ = 2.0  # CPU frequency
-        CYCLES_PER_PACKET = 2000   # Cycles needed to process one packet
-        PACKET_SIZE_BYTES = 1500   # Average packet size
-        BUFFER_FRACTION = 0.7      # Fraction of memory for buffers
-        MISS_LATENCY_MS = 0.5      # Memory miss latency
-        PROPAGATION_DELAY_MS = 5   # Base propagation delay
-        EFFICIENCY_FACTOR = 0.9    # Bandwidth efficiency
-        BASE_LOSS = 0.001          # Base wireless loss
-        HIGH_LATENCY_PENALTY = 1000  # Penalty for overload (ms)
-        
+
+        # ---- Tunable constants ----
+        PACKET_SIZE_BYTES = 1500                 # average packet size in bytes
+        PACKET_SIZE_BITS = PACKET_SIZE_BYTES * 8
+        ALPHA_CPU = 1000.0                        # packets/sec per CPU core (tune to your NFs)
+        PHI_BUFFER = 0.5                          # fraction of requested_mem used as packet buffer
+        PROP_DELAY_PER_HOP_S = 0.001              # propagation/switching delay per internal hop (s)
+        EXTERNAL_LINK_CAPACITY_BPS = 100e6        # default external capacity (bps) (tunable)
+        EXTERNAL_PROP_DELAY_S = 0.020             # external propagation delay (s) (tunable)
+        EXTERNAL_BASE_LOSS = 0.0                  # base non-congestion external loss (e.g. physical loss)
+        LARGE_DELAY_S = 10.0                      # used when overloaded (s) - large but finite
+        QOS_ERROR_MARGIN = 0.10                   # margin for considering QoS violations
+
         results = []
-        
+
         for s in slices:
-            allocated_bw = s['allocated_bw']
-            bw_usage = s['bw_usage']
-            nfs = s['nfs']
-            
-            # External QoS (bandwidth-driven)
-            ext_throughput = min(allocated_bw, bw_usage) * EFFICIENCY_FACTOR
-            
-            transmission_delay_sec = (PACKET_SIZE_BYTES * 8) / allocated_bw if allocated_bw > 0 else HIGH_LATENCY_PENALTY / 1000
-            if bw_usage < allocated_bw:
-                queuing_delay_sec = 1 / (allocated_bw - bw_usage) if (allocated_bw - bw_usage) > 0 else HIGH_LATENCY_PENALTY / 1000
-            else:
-                queuing_delay_sec = HIGH_LATENCY_PENALTY / 1000
-            ext_latency = PROPAGATION_DELAY_MS + 1000 * (transmission_delay_sec + queuing_delay_sec)
-            
-            if bw_usage <= allocated_bw:
-                ext_loss = BASE_LOSS
-            else:
-                ext_loss = (bw_usage - allocated_bw) / bw_usage + BASE_LOSS
-            
-            # Internal QoS (aggregate over NFs)
-            int_throughput = float('inf')
-            int_latency = 0.0
-            int_loss = 0.0  # We'll average losses
-            
+            allocated_bw = float(s.get('allocated_bw', 0.0)) * 1e6  # capacity for slice (bps)
+            bw_usage = float(s.get('bw_usage', 0.0)) * 1e6           # offered (bps)
+            # compute offered packet-rate (packets/s)
+            lambda_slice_pkts = (bw_usage / PACKET_SIZE_BITS) if PACKET_SIZE_BITS > 0 else 0.0
+
+            nfs = s.get('nfs', [])
+            per_nf = []
+
+            # per-NF computations
+            nf_throughputs_bps = []
+            nf_block_probs = []
+            nf_system_times_s = []
+
             for nf in nfs:
-                # Effective allocations
-                effective_cpu = max(nf['min_cpu'], min(nf['requested_cpu'], nf['limited_cpu']))
-                effective_mem = max(nf['min_mem'], min(nf['requested_mem'], nf['limited_mem']))
-                
-                # Service rate μ (packets/sec)
-                mu = (effective_cpu * CPU_CLOCK_SPEED_GHZ * 1e9) / CYCLES_PER_PACKET
-                
-                # Adjust for overload
-                if nf['cpu_usage'] > effective_cpu:
-                    mu *= (effective_cpu / nf['cpu_usage'])
-                
-                # Arrival rate λ (from bw_usage, assume slice bw_usage is input rate)
-                lambda_rate = bw_usage / (PACKET_SIZE_BYTES * 8)  # packets/sec
-                
-                # Throughput per NF
-                nf_throughput = min(mu * (PACKET_SIZE_BYTES * 8), bw_usage)  # bps
-                if nf['mem_usage'] > effective_mem:
-                    nf_throughput *= (effective_mem / nf['mem_usage'])
-                int_throughput = min(int_throughput, nf_throughput)
-                
-                # Latency per NF
-                processing_delay_sec = (PACKET_SIZE_BYTES * 8) / (mu * (PACKET_SIZE_BYTES * 8)) if mu > 0 else HIGH_LATENCY_PENALTY / 1000
-                if lambda_rate < mu:
-                    queuing_delay_sec = 1 / (mu - lambda_rate)
+                requested_cpu = max(0.0, float(nf.get('requested_cpu', 0.0)))
+                requested_mem_mb = max(0.0, float(nf.get('requested_mem', 0.0)))
+
+                # service rate (pkts/s)
+                mu = ALPHA_CPU * requested_cpu
+
+                # arrival rate into this NF - we assume the slice offered pkts traverse the NF (f_j = 1)
+                lam = lambda_slice_pkts
+
+                # buffer size K derived from memory: use PHI_BUFFER portion for packets
+                buffer_bytes = (requested_mem_mb * 1024 * 1024) * PHI_BUFFER
+                pkt_size_bytes = PACKET_SIZE_BYTES if PACKET_SIZE_BYTES > 0 else 1
+                K = int(max(0, math.floor(buffer_bytes / pkt_size_bytes)))
+
+                # traffic intensity
+                rho = (lam / mu) if mu > 0 else float('inf')
+
+                # blocking probability P_block using M/M/1/K (rho != 1)
+                if mu <= 0:
+                    P_block = 1.0
                 else:
-                    queuing_delay_sec = HIGH_LATENCY_PENALTY / 1000
-                
-                stall_delay_ms = 0
-                if nf['mem_usage'] > 0.8 * effective_mem:
-                    miss_rate = max(0, (nf['mem_usage'] - effective_mem) / nf['mem_usage'])
-                    stall_delay_ms = miss_rate * MISS_LATENCY_MS
-                
-                nf_latency = 1000 * (processing_delay_sec + queuing_delay_sec) + stall_delay_ms
-                int_latency += nf_latency
-                
-                # Loss per NF (approximate M/M/1/K)
-                buffer_size_packets = (effective_mem * BUFFER_FRACTION * 1e6 * 8) / (PACKET_SIZE_BYTES * 8)  # bits to packets
-                K = max(1, int(buffer_size_packets))
-                rho = lambda_rate / mu if mu > 0 else 1
-                if rho != 1:
-                    loss = (rho ** K * (1 - rho)) / (1 - rho ** (K + 1))
+                    if rho == 1.0:
+                        # limiting value
+                        P_block = 1.0 / (K + 1) if K >= 0 else 1.0
+                    else:
+                        # handle rho very close to 1 carefully
+                        if rho < 1.0:
+                            # compute (1-rho) * rho^K / (1 - rho^(K+1))
+                            # guard against rho**(K+1) under/overflow by using math.pow
+                            try:
+                                numerator = (1.0 - rho) * math.pow(rho, K)
+                                denom = 1.0 - math.pow(rho, K + 1)
+                                P_block = numerator / denom if denom != 0 else 1.0
+                            except OverflowError:
+                                # when rho^K under/overflows, resort to boundary
+                                P_block = 0.0 if rho < 1.0 and K == 0 else min(1.0, math.exp(-abs(K)))
+                        else:
+                            # rho > 1: extremely overloaded, many arrivals are blocked if buffer finite
+                            # Use approx: most packets blocked -> set P_block close to 1 but bounded
+                            if K == 0:
+                                P_block = 1.0
+                            else:
+                                # approximate with geometric tail
+                                try:
+                                    P_block = min(0.999999, math.pow(rho / (1.0 + rho), K))
+                                except OverflowError:
+                                    P_block = 0.999999
+
+                # mean system time T_j (s) approx
+                if mu > lam and lam >= 0:
+                    # approximate M/M/1 mean system time
+                    try:
+                        T = 1.0 / (mu - lam)
+                    except ZeroDivisionError:
+                        T = LARGE_DELAY_S
                 else:
-                    loss = 1 / (K + 1)
-                if nf['cpu_usage'] > effective_cpu or nf['mem_usage'] > effective_mem:
-                    overload_loss = max(0, max((nf['cpu_usage'] - effective_cpu) / nf['cpu_usage'], (nf['mem_usage'] - effective_mem) / nf['mem_usage']))
-                    loss = min(1, loss + overload_loss)
-                int_loss += loss / len(nfs)  # Average
-            
-            # Add base propagation to int_latency
-            int_latency += PROPAGATION_DELAY_MS
-            
-            # Check satisfaction
+                    T = LARGE_DELAY_S
+
+                # throughput accepted (pkts/s) and convert to bps
+                accepted_pkts_per_s = lam * (1.0 - P_block)
+                throughput_bps = accepted_pkts_per_s * PACKET_SIZE_BITS
+
+                per_nf.append({
+                    'mu_pkts_s': mu,
+                    'lambda_pkts_s': lam,
+                    'rho': rho,
+                    'K_packets': K,
+                    'P_block': P_block,
+                    'T_s': T,
+                    'throughput_bps': throughput_bps
+                })
+
+                nf_throughputs_bps.append(throughput_bps)
+                nf_block_probs.append(P_block)
+                nf_system_times_s.append(T)
+
+            # Compose internal throughput: limited by slice allocated_bw and bottleneck NF throughput
+            min_nf_throughput_bps = min(nf_throughputs_bps) if nf_throughputs_bps else float('inf')
+            int_throughput_bps = min(allocated_bw if allocated_bw > 0 else float('inf'),
+                                    min_nf_throughput_bps if min_nf_throughput_bps != float('inf') else float('inf'))
+
+            # Internal latency: sum NF system times + per-internal-hop tx and prop delays
+            sum_nf_system_time_s = sum(nf_system_times_s)
+            num_internal_hops = max(0, len(nfs) - 1)   # packets typically traverse (nfs-1) internal links
+            tx_delay_per_hop_s = (PACKET_SIZE_BITS / allocated_bw) if allocated_bw > 0 else LARGE_DELAY_S
+            internal_link_prop_s = PROP_DELAY_PER_HOP_S
+            total_internal_tx_and_prop_s = num_internal_hops * (tx_delay_per_hop_s + internal_link_prop_s)
+            int_latency_s = sum_nf_system_time_s + total_internal_tx_and_prop_s
+            int_latency_ms = int_latency_s * 1000.0
+
+            # Internal loss: combine NF blocking and link drops
+            # link drop approximated as congestion drop if bw_usage > allocated_bw
+            if bw_usage > 0 and allocated_bw > 0:
+                link_drop_per_hop = max(0.0, 1.0 - (allocated_bw / bw_usage)) if bw_usage > 0 else 0.0
+                # clamp
+                link_drop_per_hop = min(max(link_drop_per_hop, 0.0), 1.0)
+            else:
+                link_drop_per_hop = 0.0
+
+            # combined delivered probability = product over (1 - P_block_j) * product over (1 - link_drop)
+            prod_nf_success = 1.0
+            for pb in nf_block_probs:
+                prod_nf_success *= max(0.0, 1.0 - pb)
+            prod_links_success = math.pow(max(0.0, 1.0 - link_drop_per_hop), num_internal_hops)
+            delivered_prob = prod_nf_success * prod_links_success
+            int_loss = 1.0 - delivered_prob
+            int_loss = min(max(int_loss, 0.0), 1.0)
+
+            # External path: extend with an external link (use EXTERNAL_LINK_CAPACITY_BPS)
+            external_link_capacity = EXTERNAL_LINK_CAPACITY_BPS
+            # external link drop due to congestion
+            if bw_usage > 0 and external_link_capacity > 0:
+                ext_link_drop = max(0.0, 1.0 - (external_link_capacity / bw_usage)) if bw_usage > 0 else 0.0
+                ext_link_drop = min(max(ext_link_drop, 0.0), 1.0)
+            else:
+                ext_link_drop = 0.0
+
+            # external throughput limited by internal throughput and external capacity
+            ext_throughput_bps = min(int_throughput_bps if int_throughput_bps is not None else 0.0, external_link_capacity)
+
+            # external latency = internal latency + external tx + external prop
+            external_tx_s = (PACKET_SIZE_BITS / external_link_capacity) if external_link_capacity > 0 else LARGE_DELAY_S
+            ext_latency_s = int_latency_s + external_tx_s + EXTERNAL_PROP_DELAY_S
+            ext_latency_ms = ext_latency_s * 1000.0
+
+            # external loss composes internal loss and external link drops and a base external loss
+            ext_loss = 1.0 - ((1.0 - int_loss) * (1.0 - ext_link_drop) * (1.0 - EXTERNAL_BASE_LOSS))
+            ext_loss = min(max(ext_loss, 0.0), 1.0)
+
+            # SLA satisfaction flags (interpretation: throughput >= target, latency <= target, loss <= target)
+            int_target_latency_ms = float(s.get('target_int_latency_ms', float('inf')))
+            int_target_loss = float(s.get('target_int_loss', 1.0))
+            int_target_throughput = float(s.get('target_int_throughput', 0.0))
+
+            ext_target_latency_ms = float(s.get('target_ext_latency_ms', float('inf')))
+            ext_target_loss = float(s.get('target_ext_loss', 1.0))
+            ext_target_throughput = float(s.get('target_ext_throughput', 0.0))
+
+
             qos_satisfied = {
-                'int_latency': int_latency <= s['target_int_latency_ms'] * 1.1,
-                'int_loss': int_loss <= s['target_int_loss'] * 1.1,
-                'int_throughput': int_throughput >= s['target_int_throughput'] * 0.9,
-                'ext_latency': ext_latency <= s['target_ext_latency_ms'] * 1.1,
-                'ext_loss': ext_loss <= s['target_ext_loss'] * 1.1,
-                'ext_throughput': ext_throughput >= s['target_ext_throughput'] * 0.9,
+                'int_latency': int_latency_ms <= int_target_latency_ms * (1.0 + QOS_ERROR_MARGIN),
+                'int_loss': int_loss <= int_target_loss * (1.0 + QOS_ERROR_MARGIN),
+                'int_throughput': int_throughput_bps >= int_target_throughput  * (1.0 - QOS_ERROR_MARGIN),
+                'ext_latency': ext_latency_ms <= ext_target_latency_ms * (1.0 + QOS_ERROR_MARGIN),
+                'ext_loss': ext_loss <= ext_target_loss * (1.0 + QOS_ERROR_MARGIN),
+                'ext_throughput': ext_throughput_bps >= ext_target_throughput * (1.0 - QOS_ERROR_MARGIN),
             }
-            
+
+            int_sla_ok = all(qos_satisfied[k] for k in ['int_latency', 'int_loss', 'int_throughput'])
+            ext_sla_ok = all(qos_satisfied[k] for k in ['ext_latency', 'ext_loss', 'ext_throughput'])
+
             results.append({
-                'int_latency': int_latency,
-                'int_loss': int_loss,
-                'int_throughput': int_throughput,
-                'ext_latency': ext_latency,
-                'ext_loss': ext_loss,
-                'ext_throughput': ext_throughput,
-                'qos_satisfied': qos_satisfied
+                'int_latency': float(int_latency_ms),
+                'int_loss': float(int_loss),
+                'int_throughput': float(int_throughput_bps) / 1e6,  # convert to Mbps
+                'ext_latency': float(ext_latency_ms),
+                'ext_loss': float(ext_loss),
+                'ext_throughput': float(ext_throughput_bps) / 1e6,  # convert to Mbps
+                'int_sla_ok': bool(int_sla_ok),
+                'ext_sla_ok': bool(ext_sla_ok),
+                'qos_satisfied': qos_satisfied,
+                'per_nf': per_nf,
+                # helpful diagnostics
+                'num_internal_hops': num_internal_hops,
+                'link_drop_per_internal_hop': float(link_drop_per_hop),
+                'external_link_drop': float(ext_link_drop),
+                'lambda_slice_pkts': float(lambda_slice_pkts)
             })
-        
+
         return results
+
 
 
 
