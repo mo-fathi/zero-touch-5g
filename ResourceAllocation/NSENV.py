@@ -251,9 +251,9 @@ class NetSliceEnv(gym.Env):
                 total_cpu_over += max(0.0, nf["requested_cpu"] - nf["cpu_usage"] )
                 total_mem_over += max(0.0, nf["requested_mem"] - nf["mem_usage"] )
 
-                total_used_cpu += max(nf["cpu_usage"], nf["requested_cpu"])
+                total_used_cpu += min(nf["cpu_usage"], nf["requested_cpu"])
                 total_requested_cpu += nf["requested_cpu"]
-                total_used_mem += max(nf["mem_usage"], nf["requested_mem"])
+                total_used_mem += min(nf["mem_usage"], nf["requested_mem"])
                 total_requested_mem += nf["requested_mem"]
 
             total_used_bw += s["bw_usage"]
@@ -268,6 +268,8 @@ class NetSliceEnv(gym.Env):
                         qos[slice_idx]["qos_satisfied"]["ext_loss"],
                         qos[slice_idx]["qos_satisfied"]["ext_throughput"]                 
                         ])
+
+            total_bw_over += max(0.0, s["allocated_bw"] - s["bw_usage"] )
 
             if qos_ok:
                 reward += 200.0
@@ -300,6 +302,12 @@ class NetSliceEnv(gym.Env):
             bw_util = total_used_bw / total_allocated_bw
             reward += 15.0 * bw_util
 
+        # Penalties for over-provisioning
+        reward -= 0.05 * total_cpu_over
+        reward -= 0.02 * total_mem_over
+        reward -= 0.04 * total_bw_over
+
+        
         # Penalties for cost of allocations
         reward -= 0.03 * total_requested_cpu
         reward -= 0.01 * total_requested_mem
