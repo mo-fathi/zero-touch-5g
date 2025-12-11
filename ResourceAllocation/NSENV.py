@@ -77,7 +77,7 @@ class NetSliceEnv(gym.Env):
         initial_slices = random.randint(2, self.max_slices // 2 + 1)
         for _ in range(initial_slices):
             self.simulator.add_slice()
-        self.simulator.update_loads()
+        self.simulator.update_loads(qos_state= self.simulate_qos(self.simulator.active_slices))
 
         return self._get_obs(), {}
 
@@ -122,7 +122,7 @@ class NetSliceEnv(gym.Env):
         if random.random() < 0.04 and active > 1:
             self.simulator.remove_slice()
 
-        self.simulator.update_loads()
+        self.simulator.update_loads(qos_state = self.simulate_qos(self.simulator.active_slices))
 
         reward = self._compute_reward()
         info["active_slices"] = len(self.simulator.active_slices)
@@ -269,23 +269,21 @@ class NetSliceEnv(gym.Env):
                         ])
 
             if qos_ok:
-                reward += 25.0
+                reward += 200.0
             else:
-                reward -= 40.0
-
-            # Specific QoS penalties
-            if not qos[slice_idx]["qos_satisfied"]["int_latency"]:
-                reward -= 10.0 * (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
-            if not qos[slice_idx]["qos_satisfied"]["int_loss"]:
-                reward -= 5.0 * (qos[slice_idx]["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
-            if not qos[slice_idx]["qos_satisfied"]["int_throughput"]:
-                reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"]
-            if not qos[slice_idx]["qos_satisfied"]["ext_latency"]:
-                reward -= 10.0 * (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
-            if not qos[slice_idx]["qos_satisfied"]["ext_loss"]:
-                reward -= 5.0 * (qos[slice_idx]["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
-            if not qos[slice_idx]["qos_satisfied"]["ext_throughput"]:
-                reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"]
+                # Specific QoS penalties
+                if not qos[slice_idx]["qos_satisfied"]["int_latency"]:
+                    reward -= 10.0 * (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
+                if not qos[slice_idx]["qos_satisfied"]["int_loss"]:
+                    reward -= 5.0 * (qos[slice_idx]["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
+                if not qos[slice_idx]["qos_satisfied"]["int_throughput"]:
+                    reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"]
+                if not qos[slice_idx]["qos_satisfied"]["ext_latency"]:
+                    reward -= 10.0 * (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
+                if not qos[slice_idx]["qos_satisfied"]["ext_loss"]:
+                    reward -= 5.0 * (qos[slice_idx]["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
+                if not qos[slice_idx]["qos_satisfied"]["ext_throughput"]:
+                    reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"]
 
             slice_idx += 1
 
@@ -521,7 +519,7 @@ class ClusterSimulator():
             current_remaining_cpu -= max(cpu_usage, requested_cpu)
             current_remaining_mem -= max(mem_usage, requested_mem)
 
-        min_bw = random.uniform(20.0, 70.0)
+        min_bw = random.uniform(50.0, 80.0)
         allocated_bw = random.uniform(min_bw, 150.0)
         bw_usage = random.uniform(min_bw, allocated_bw)
 
@@ -533,10 +531,10 @@ class ClusterSimulator():
             "allocated_bw": allocated_bw,
             "bw_usage": bw_usage,
             "target_int_latency_ms": random.uniform(5.0, 20.0),
-            "target_int_loss": random.uniform(0.001, 0.01),
+            "target_int_loss": random.uniform(0.001, 0.02),
             "target_int_throughput": random.uniform(100.0, 500.0),  # Mbps
             "target_ext_latency_ms": random.uniform(10.0, 50.0),
-            "target_ext_loss": random.uniform(0.001, 0.01),
+            "target_ext_loss": random.uniform(0.01, 0.03),
             "target_ext_throughput": random.uniform(50.0, 200.0),  # Mbps
         })
 
@@ -557,8 +555,9 @@ class ClusterSimulator():
         
         del self.active_slices[idx]
 
-    def update_loads(self):
+    def update_loads(self, qos_state):
         # Simulate changes in resource usage for each slice and its NFs
+        slice_idx = 0
         for s in self.active_slices:
             for nf in s["nfs"]:
                 cpu_change = random.gauss(0, 0.2)
@@ -584,8 +583,12 @@ class ClusterSimulator():
                 else:
                     nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
                     self.remaining_cpu -= cpu_change
+            if( not qos_state[slice_idx]["qos_satisfied"]["ext_throughput"] ):
+                s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(15.0, 2.0), s["min_bw"], s["allocated_bw"])
+            else:
+                s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), s["min_bw"], s["allocated_bw"])
 
-            s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), s["min_bw"], s["allocated_bw"])
+            slice_idx += 1
 
     def apply_delta(self, idx: int, cpu_deltas: np.ndarray, mem_deltas: np.ndarray, delta_bw: float):
         # Apply resource allocation deltas to the specified slice
