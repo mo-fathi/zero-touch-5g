@@ -127,6 +127,8 @@ class NetSliceEnv(gym.Env):
 
         reward = self._compute_reward()
         info["active_slices"] = len(self.simulator.active_slices)
+        metrics = self._get_metrics()
+        info.update(metrics)
 
         self.current_step += 1
         if self.current_step >= 1000:
@@ -307,7 +309,7 @@ class NetSliceEnv(gym.Env):
         reward -= 0.02 * total_mem_over
         reward -= 0.04 * total_bw_over
 
-        
+
         # Penalties for cost of allocations
         reward -= 0.03 * total_requested_cpu
         reward -= 0.01 * total_requested_mem
@@ -319,6 +321,101 @@ class NetSliceEnv(gym.Env):
     def _get_info(self):
         pass
     
+
+    def _get_metrics(self):
+        qos = self.simulate_qos(self.simulator.active_slices)
+        
+        total_used_cpu = total_requested_cpu = total_used_mem = total_requested_mem = total_used_bw = total_allocated_bw = 0.0
+        total_cpu_over = total_mem_over = total_bw_over = 0.0
+        
+        num_ok = num_int_ok = num_ext_ok = 0
+        num_active = len(self.simulator.active_slices)
+        
+        sum_int_latency = sum_int_loss = sum_int_throughput = 0.0
+        sum_ext_latency = sum_ext_loss = sum_ext_throughput = 0.0
+
+        total_cluster_cpu_used = total_cluster_mem_used = total_cluster_bw_used = 0.0
+        total_cluster_cpu_requested = total_cluster_mem_requested = total_cluster_bw_allocated = 0.0
+        
+        for i, s in enumerate(self.simulator.active_slices):
+            for nf in s["nfs"]:
+                total_cpu_over += max(0.0, nf["requested_cpu"] - nf["cpu_usage"])
+                total_mem_over += max(0.0, nf["requested_mem"] - nf["mem_usage"])
+                
+                total_used_cpu += min(nf["cpu_usage"], nf["requested_cpu"])
+                total_requested_cpu += nf["requested_cpu"]
+                total_used_mem += min(nf["mem_usage"], nf["requested_mem"])
+                total_requested_mem += nf["requested_mem"]
+
+                total_cluster_cpu_used += nf["cpu_usage"]
+                total_cluster_cpu_requested += nf["requested_cpu"]
+                total_cluster_mem_used += nf["mem_usage"]
+                total_cluster_mem_requested += nf["requested_mem"]
+            
+            total_used_bw += s["bw_usage"]
+            total_allocated_bw += s["allocated_bw"]
+            total_bw_over += max(0.0, s["allocated_bw"] - s["bw_usage"])
+
+            total_cluster_bw_allocated += s["allocated_bw"]
+            total_cluster_bw_used += s["bw_usage"]
+            
+            slice_qos_ok = all(qos[i]["qos_satisfied"].values())
+            if slice_qos_ok:
+                num_ok += 1
+            
+            if qos[i]["int_sla_ok"]:
+                num_int_ok += 1
+            if qos[i]["ext_sla_ok"]:
+                num_ext_ok += 1
+            
+            sum_int_latency += qos[i]["int_latency"]
+            sum_int_loss += qos[i]["int_loss"]
+            sum_int_throughput += qos[i]["int_throughput"]
+            sum_ext_latency += qos[i]["ext_latency"]
+            sum_ext_loss += qos[i]["ext_loss"]
+            sum_ext_throughput += qos[i]["ext_throughput"]
+        
+        cpu_util = total_used_cpu / total_requested_cpu if total_requested_cpu > 0 else 0.0
+        mem_util = total_used_mem / total_requested_mem if total_requested_mem > 0 else 0.0
+        bw_util = total_used_bw / total_allocated_bw if total_allocated_bw > 0 else 0.0
+        
+        fraction_qos_ok = num_ok / num_active if num_active > 0 else 0.0
+        fraction_int_ok = num_int_ok / num_active if num_active > 0 else 0.0
+        fraction_ext_ok = num_ext_ok / num_active if num_active > 0 else 0.0
+        
+        avg_int_latency = sum_int_latency / num_active if num_active > 0 else 0.0
+        avg_int_loss = sum_int_loss / num_active if num_active > 0 else 0.0
+        avg_int_throughput = sum_int_throughput / num_active if num_active > 0 else 0.0
+        avg_ext_latency = sum_ext_latency / num_active if num_active > 0 else 0.0
+        avg_ext_loss = sum_ext_loss / num_active if num_active > 0 else 0.0
+        avg_ext_throughput = sum_ext_throughput / num_active if num_active > 0 else 0.0
+        
+        return {
+            "active_slices": num_active,
+            "cluster_cpu_requested": total_cluster_cpu_requested,
+            "cluster_cpu_used": total_cluster_cpu_used,
+            "cluster_mem_requested": total_cluster_mem_requested,
+            "cluster_mem_used": total_cluster_mem_used,
+            "cluster_bw_allocated": total_cluster_bw_allocated,
+            "cluster_bw_used": total_cluster_bw_used,
+            "cpu_util": cpu_util,
+            "mem_util": mem_util,
+            "bw_util": bw_util,
+            "fraction_qos_ok": fraction_qos_ok,
+            "fraction_int_ok": fraction_int_ok,
+            "fraction_ext_ok": fraction_ext_ok,
+            "total_cpu_over": total_cpu_over,
+            "total_mem_over": total_mem_over,
+            "total_bw_over": total_bw_over,
+            "avg_int_latency": avg_int_latency,
+            "avg_int_loss": avg_int_loss,
+            "avg_int_throughput": avg_int_throughput,
+            "avg_ext_latency": avg_ext_latency,
+            "avg_ext_loss": avg_ext_loss,
+            "avg_ext_throughput": avg_ext_throughput,
+        }
+
+        
 
 
     def simulate_qos(self, slices) -> List[Dict]:
@@ -606,7 +703,7 @@ class ClusterSimulator():
             cpu_usage = random.uniform(min_cpu, limited_cpu)
             mem_usage = random.uniform(min_mem, limited_mem)
             if(
-                current_remaining_cpu < max(cpu_usage, requested_cpu) and
+                current_remaining_cpu < max(cpu_usage, requested_cpu) or
                 current_remaining_mem < max(mem_usage, requested_mem)
             ):
                 return
@@ -629,6 +726,8 @@ class ClusterSimulator():
 
         if current_remaining_bw < allocated_bw:
             return
+        
+        # Add the new slice
         self.active_slices.append({
             "nfs": nfs,
             "min_bw": min_bw,

@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from stable_baselines3 import SAC
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from stable_baselines3.common.callbacks import BaseCallback
 
 from NSENV import NetSliceEnv
 
@@ -73,6 +74,44 @@ class MaskedFeatureExtractor(BaseFeaturesExtractor):
         combined = th.cat([pooled, cluster_encoded], dim=1)  # (B, 224)
         return self.final(combined)
 
+# Modifications to RA_SAC.py
+# Add the following imports:
+from stable_baselines3.common.callbacks import BaseCallback
+
+# Add the following class after the model definition:
+class TensorboardCallback(BaseCallback):
+    """
+    Custom callback for plotting additional values in tensorboard.
+    """
+    def __init__(self, verbose=0):
+        super(TensorboardCallback, self).__init__(verbose)
+
+    def _on_step(self) -> bool:
+        if self.locals.get('infos') and len(self.locals['infos']) > 0:
+            info = self.locals['infos'][0]
+            self.logger.record('train/active_slices', info.get('active_slices', 0))
+            self.logger.record('train/cluster_cpu_requested', info.get('cluster_cpu_requested', 0.0))
+            self.logger.record('train/cluster_cpu_used', info.get('cluster_cpu_used', 0.0))
+            self.logger.record('train/cluster_mem_requested', info.get('cluster_mem_requested', 0.0))
+            self.logger.record('train/cluster_mem_used', info.get('cluster_mem_used', 0.0))
+            self.logger.record('train/cluster_bw_allocated', info.get('cluster_bw_allocated', 0.0))
+            self.logger.record('train/cluster_bw_used', info.get('cluster_bw_used', 0.0))
+            self.logger.record('train/cpu_util', info.get('cpu_util', 0.0))
+            self.logger.record('train/mem_util', info.get('mem_util', 0.0))
+            self.logger.record('train/bw_util', info.get('bw_util', 0.0))
+            self.logger.record('train/fraction_qos_ok', info.get('fraction_qos_ok', 0.0))
+            self.logger.record('train/fraction_int_ok', info.get('fraction_int_ok', 0.0))
+            self.logger.record('train/fraction_ext_ok', info.get('fraction_ext_ok', 0.0))
+            self.logger.record('train/total_cpu_over', info.get('total_cpu_over', 0.0))
+            self.logger.record('train/total_mem_over', info.get('total_mem_over', 0.0))
+            self.logger.record('train/total_bw_over', info.get('total_bw_over', 0.0))
+            self.logger.record('train/avg_int_latency', info.get('avg_int_latency', 0.0))
+            self.logger.record('train/avg_int_loss', info.get('avg_int_loss', 0.0))
+            self.logger.record('train/avg_int_throughput', info.get('avg_int_throughput', 0.0))
+            self.logger.record('train/avg_ext_latency', info.get('avg_ext_latency', 0.0))
+            self.logger.record('train/avg_ext_loss', info.get('avg_ext_loss', 0.0))
+            self.logger.record('train/avg_ext_throughput', info.get('avg_ext_throughput', 0.0))
+        return True
 
 if __name__ == "__main__":
     
@@ -121,7 +160,7 @@ if __name__ == "__main__":
 
     print(f"Starting training at {timestamp}...")
     
-    model.learn(total_timesteps=40_000, progress_bar=True)
+    model.learn(total_timesteps=10_000, progress_bar=True, callback=TensorboardCallback())
     model.save(f"sac_5g_slice_agent-{timestamp}.zip")
 
     # Quick evaluation

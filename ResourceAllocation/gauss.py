@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 	
 # # store the random numbers in a list 
 # nums = [] 
-mu = 15
-sigma = 2
+mu = 0
+sigma = 0.2
 	
 # for i in range(100): 
 # 	temp = random.gauss(mu, sigma) 
