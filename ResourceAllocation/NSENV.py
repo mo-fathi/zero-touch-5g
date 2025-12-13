@@ -59,7 +59,7 @@ class NetSliceEnv(gym.Env):
         #           ...
         #           ...
         #           slice_max_cpu_NF1, ..., slice_max_cpu_NFmax, slice_max_mem_NF1, ..., slice_max_mem_NFmax, slice_max_BW}
-        self.action_space = Box (low=-5, high=5.0, shape=(action_dim,), dtype=np.float32)
+        self.action_space = Box (low=-5.0, high=5.0, shape=(action_dim,), dtype=np.float32)
 
 
         # Create cluster simulator
@@ -78,7 +78,40 @@ class NetSliceEnv(gym.Env):
         initial_slices = random.randint(2, self.max_slices // 2 + 1)
         for _ in range(initial_slices):
             self.simulator.add_slice()
+
+        total_cpu = 0.0
+        total_mem = 0.0
+        total_bw = 0.0
+        for i in range(len(self.simulator.active_slices)):
+            total_cpu += sum(max(nf["requested_cpu"],nf["cpu_usage"]) for nf in self.simulator.active_slices[i]["nfs"])   
+            total_mem += sum(max(nf["requested_mem"],nf["mem_usage"]) for nf in self.simulator.active_slices[i]["nfs"])
+            total_bw += self.simulator.active_slices[i]["allocated_bw"]
+        
+        if int(self.simulator.total_capacity_cpu - total_cpu) != int( self.simulator.remaining_cpu) or  int(self.simulator.total_capacity_mem - total_mem )!= int(self.simulator.remaining_mem )or int(self.simulator.total_capacity_bw - total_bw )!= int(self.simulator.remaining_bw):
+            raise ValueError(f"Resource accounting error in step {self.current_step} after initial slices",
+                                f"calculated remaining_cpu: {self.simulator.total_capacity_cpu - total_cpu}, simulator remaining_cpu: {self.simulator.remaining_cpu}, "
+                                f"calculated remaining_mem: {self.simulator.total_capacity_mem - total_mem}, simulator remaining_mem: {self.simulator.remaining_mem}, "
+                                f"calculated remaining_bw: {self.simulator.total_capacity_bw - total_bw}, simulator remaining_bw: {self.simulator.remaining_bw}, "
+                                f"active_slices: {self.simulator.active_slices}"
+                                )
+
         self.simulator.update_loads(qos_state= self.simulate_qos(self.simulator.active_slices))
+
+        total_cpu = 0.0
+        total_mem = 0.0
+        total_bw = 0.0
+        for i in range(len(self.simulator.active_slices)):
+            total_cpu += sum(max(nf["requested_cpu"],nf["cpu_usage"]) for nf in self.simulator.active_slices[i]["nfs"])   
+            total_mem += sum(max(nf["requested_mem"],nf["mem_usage"]) for nf in self.simulator.active_slices[i]["nfs"])
+            total_bw += self.simulator.active_slices[i]["allocated_bw"]
+        
+        if int(self.simulator.total_capacity_cpu - total_cpu) != int( self.simulator.remaining_cpu) or  int(self.simulator.total_capacity_mem - total_mem )!= int(self.simulator.remaining_mem )or int(self.simulator.total_capacity_bw - total_bw )!= int(self.simulator.remaining_bw):
+            raise ValueError(f"Resource accounting error in step {self.current_step} after updating loads",
+                                f"calculated remaining_cpu: {self.simulator.total_capacity_cpu - total_cpu}, simulator remaining_cpu: {self.simulator.remaining_cpu}, "
+                                f"calculated remaining_mem: {self.simulator.total_capacity_mem - total_mem}, simulator remaining_mem: {self.simulator.remaining_mem}, "
+                                f"calculated remaining_bw: {self.simulator.total_capacity_bw - total_bw}, simulator remaining_bw: {self.simulator.remaining_bw}, "
+                                f"active_slices: {self.simulator.active_slices}"
+                                )
 
         return self._get_obs(), {}
 
@@ -87,6 +120,10 @@ class NetSliceEnv(gym.Env):
         terminated = False
         truncated = False
         info: dict[str, Any] = {}
+
+        print(f"CPU Remaining before action: {self.simulator.remaining_cpu}")
+        print(f"Mem Remaining before action: {self.simulator.remaining_mem}")
+        print(f"BW Remaining before action: {self.simulator.remaining_bw}")
 
         
         active = len(self.simulator.active_slices)
@@ -115,6 +152,26 @@ class NetSliceEnv(gym.Env):
 
         for i in range(active):
             self.simulator.apply_delta(i, cpu_deltas[i], mem_deltas[i], bw_deltas[i])
+        
+        total_cpu = 0.0
+        total_mem = 0.0
+        total_bw = 0.0
+        for i in range(len(self.simulator.active_slices)):
+            total_cpu += sum(nf["requested_cpu"] for nf in self.simulator.active_slices[i]["nfs"])   
+            total_mem += sum(nf["requested_mem"] for nf in self.simulator.active_slices[i]["nfs"])
+            total_bw += self.simulator.active_slices[i]["allocated_bw"]
+        
+        if self.simulator.total_capacity_cpu - total_cpu != self.simulator.remaining_cpu or             self.simulator.total_capacity_mem - total_mem != self.simulator.remaining_mem or self.simulator.total_capacity_bw - total_bw != self.simulator.remaining_bw:
+            raise ValueError(f"Resource accounting error in step{self.current_step} after applying action",
+                                f"calculated remaining_cpu: {self.simulator.total_capacity_cpu - total_cpu}, simulator remaining_cpu: {self.simulator.remaining_cpu}, "
+                                f"calculated remaining_mem: {self.simulator.total_capacity_mem - total_mem}, simulator remaining_mem: {self.simulator.remaining_mem}, "
+                                f"calculated remaining_bw: {self.simulator.total_capacity_bw - total_bw}, simulator remaining_bw: {self.simulator.remaining_bw}, "
+                                f"active_slices: {self.simulator.active_slices}"
+                                )
+
+        # print(f"CPU Remaining after action: {self.simulator.remaining_cpu}")
+        # print(f"Mem Remaining after action: {self.simulator.remaining_mem}")
+        # print(f"BW Remaining after action: {self.simulator.remaining_bw}")
 
         # Dynamic arrival/departure
         # TODO make it better, for example base on time
@@ -123,7 +180,39 @@ class NetSliceEnv(gym.Env):
         if random.random() < 0.04 and active > 1:
             self.simulator.remove_slice()
 
+        total_cpu = 0.0
+        total_mem = 0.0
+        total_bw = 0.0
+        for i in range(len(self.simulator.active_slices)):
+            total_cpu += sum(nf["requested_cpu"] for nf in self.simulator.active_slices[i]["nfs"])   
+            total_mem += sum(nf["requested_mem"] for nf in self.simulator.active_slices[i]["nfs"])
+            total_bw += self.simulator.active_slices[i]["allocated_bw"]
+        
+        if self.simulator.total_capacity_cpu - total_cpu != self.simulator.remaining_cpu or             self.simulator.total_capacity_mem - total_mem != self.simulator.remaining_mem or self.simulator.total_capacity_bw - total_bw != self.simulator.remaining_bw:
+            raise ValueError(f"Resource accounting error in step {self.current_step} after arrival/departure",
+                                f"calculated remaining_cpu: {self.simulator.total_capacity_cpu - total_cpu}, simulator remaining_cpu: {self.simulator.remaining_cpu}, "
+                                f"calculated remaining_mem: {self.simulator.total_capacity_mem - total_mem}, simulator remaining_mem: {self.simulator.remaining_mem}, "
+                                f"calculated remaining_bw: {self.simulator.total_capacity_bw - total_bw}, simulator remaining_bw: {self.simulator.remaining_bw}, "
+                                f"active_slices: {self.simulator.active_slices}"
+                                )
+
         self.simulator.update_loads(qos_state = self.simulate_qos(self.simulator.active_slices))
+
+        total_cpu = 0.0
+        total_mem = 0.0
+        total_bw = 0.0
+        for i in range(len(self.simulator.active_slices)):
+            total_cpu += sum(nf["requested_cpu"] for nf in self.simulator.active_slices[i]["nfs"])   
+            total_mem += sum(nf["requested_mem"] for nf in self.simulator.active_slices[i]["nfs"])
+            total_bw += self.simulator.active_slices[i]["allocated_bw"]
+        
+        if self.simulator.total_capacity_cpu - total_cpu != self.simulator.remaining_cpu or self.simulator.total_capacity_mem - total_mem != self.simulator.remaining_mem or self.simulator.total_capacity_bw - total_bw != self.simulator.remaining_bw:
+            raise ValueError(f"Resource accounting error in step {self.current_step} after updating loads",
+                                f"calculated remaining_cpu: {self.simulator.total_capacity_cpu - total_cpu}, simulator remaining_cpu: {self.simulator.remaining_cpu}, "
+                                f"calculated remaining_mem: {self.simulator.total_capacity_mem - total_mem}, simulator remaining_mem: {self.simulator.remaining_mem}, "
+                                f"calculated remaining_bw: {self.simulator.total_capacity_bw - total_bw}, simulator remaining_bw: {self.simulator.remaining_bw}, "
+                                f"active_slices: {self.simulator.active_slices}"
+                                )
 
         reward = self._compute_reward()
         info["active_slices"] = len(self.simulator.active_slices)
@@ -662,6 +751,7 @@ class ClusterSimulator():
         self.total_capacity_mem = 1024.0     # GiB
         self.total_capacity_bw = 1000.0      # MHz
 
+        
         self.remaining_cpu = self.total_capacity_cpu
         self.remaining_mem = self.total_capacity_mem
         self.remaining_bw = self.total_capacity_bw
@@ -676,9 +766,9 @@ class ClusterSimulator():
     def reset(self):
         self.active_slices.clear()
 
-        self.total_remaining_cpu = self.total_capacity_cpu
-        self.total_remaining_mem = self.total_capacity_mem
-        self.total_remaining_bw = self.total_capacity_bw
+        self.remaining_cpu = self.total_capacity_cpu
+        self.remaining_mem = self.total_capacity_mem
+        self.remaining_bw = self.total_capacity_bw
 
     def add_slice(self):
         if len(self.active_slices) >= self.max_slices:
@@ -741,9 +831,20 @@ class ClusterSimulator():
             "target_ext_throughput": random.uniform(50.0, 200.0),  # Mbps
         })
 
-        self.total_remaining_cpu = current_remaining_cpu
-        self.total_remaining_mem = current_remaining_mem
-        self.total_remaining_bw = current_remaining_bw - allocated_bw
+        self.remaining_cpu = current_remaining_cpu
+        self.remaining_mem = current_remaining_mem
+        self.remaining_bw = current_remaining_bw - allocated_bw
+
+        if self.remaining_cpu > self.total_capacity_cpu or self.remaining_mem > self.total_capacity_mem or self.remaining_bw > self.total_capacity_bw:
+            raise ValueError("Resource accounting error in add_slice", 
+                             f"remaining_cpu: {self.remaining_cpu}, total_capacity_cpu: {self.total_capacity_cpu}, "
+                                f"remaining_mem: {self.remaining_mem}, total_capacity_mem: {self.total_capacity_mem}, "
+                                f"remaining_bw: {self.remaining_bw}, total_capacity_bw: {self.total_capacity_bw}",
+                                f"active_slices: {self.active_slices}",
+                                f"new slice nfs: {nfs}",
+                                f"new slice allocated_bw: {allocated_bw}"
+                                )
+
 
     def remove_slice(self, idx: int | None = None):
         if not self.active_slices:
@@ -763,35 +864,93 @@ class ClusterSimulator():
         slice_idx = 0
         for s in self.active_slices:
             for nf in s["nfs"]:
-                cpu_change = random.gauss(0, 0.2)
-                mem_change = random.gauss(0, 1.0)
-                if cpu_change > 0:
-                    if nf["cpu_usage"] > nf["requested_cpu"] and cpu_change < self.remaining_cpu:
-                        nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
-                        self.remaining_cpu -= cpu_change
-                    elif nf["cpu_usage"] < nf["requested_cpu"] and cpu_change + nf["cpu_usage"] - nf["requested_cpu"] < self.remaining_cpu:
-                        nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
-                        self.remaining_cpu -= cpu_change + nf["cpu_usage"] - nf["requested_cpu"]
-                else:
-                    nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
-                    self.remaining_cpu -= cpu_change
+                # updating cpu
+                current_cpu_usage = nf["cpu_usage"]
+                nf["cpu_usage"] = np.clip(nf["cpu_usage"] + random.gauss(0, 0.2), nf["min_cpu"], nf["limited_cpu"])
+
+                if current_cpu_usage >= nf["requested_cpu"]:
+                    
+                    if nf["cpu_usage"] >= nf["requested_cpu"]:
+                        self.remaining_cpu -= nf["cpu_usage"] - current_cpu_usage
+                    
+                    # nf["cpu_usage"] < nf["requested_cpu"]
+                    else:
+                        self.remaining_cpu -= nf["requested_cpu"] - current_cpu_usage
                 
-                if mem_change > 0:
-                    if nf["mem_usage"] > nf["requested_mem"] and mem_change < self.remaining_mem:
-                        nf["mem_usage"] = np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"])
-                        self.remaining_mem -= mem_change
-                    elif nf["mem_usage"] < nf["requested_mem"] and mem_change + nf["mem_usage"] - nf["requested_mem"] < self.remaining_mem:
-                        nf["mem_usage"] = np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"])
-                        self.remaining_mem -= mem_change + nf["mem_usage"] - nf["requested_mem"]
                 else:
-                    nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
-                    self.remaining_cpu -= cpu_change
+                    if nf["cpu_usage"] > nf["requested_cpu"]:
+                        self.remaining_cpu = nf["cpu_usage"] - nf["requested_cpu"]
+
+
+                if self.remaining_cpu < 0:
+                    nf["cpu_usage"] = np.clip(nf["cpu_usage"] + self.remaining_cpu , nf["min_cpu"], nf["limited_cpu"] )
+                    self.remaining_cpu = 0.0
+
+
+                # updating mem
+                current_mem_usage = nf["mem_usage"]
+                nf["mem_usage"] = np.clip(nf["mem_usage"] + random.gauss(0, 0.2), nf["min_mem"], nf["limited_mem"])
+
+                if current_mem_usage >= nf["requested_mem"]:
+                    
+                    if nf["mem_usage"] >= nf["requested_mem"]:
+                        self.remaining_mem -= nf["mem_usage"] - current_mem_usage
+                    
+                    # nf["mem_usage"] < nf["requested_mem"]
+                    else:
+                        self.remaining_mem -= nf["requested_mem"] - current_mem_usage
+                
+                else:
+                    if nf["mem_usage"] > nf["requested_mem"]:
+                        self.remaining_mem = nf["mem_usage"] - nf["requested_mem"]
+
+                if self.remaining_mem < 0:
+                    nf["mem_usage"] = np.clip(nf["mem_usage"] + self.remaining_mem , nf["min_mem"], nf["limited_mem"] )
+                    self.remaining_cpu = 0.0
+
             if( not qos_state[slice_idx]["qos_satisfied"]["ext_throughput"] ):
                 s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(15.0, 2.0), s["min_bw"], s["allocated_bw"])
             else:
                 s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), s["min_bw"], s["allocated_bw"])
 
             slice_idx += 1
+
+
+
+
+        # slice_idx = 0
+        # for s in self.active_slices:
+        #     for nf in s["nfs"]:
+        #         cpu_change = random.gauss(0, 0.2)
+        #         if cpu_change > 0:
+        #             if nf["cpu_usage"] > nf["requested_cpu"] and cpu_change <= self.remaining_cpu:
+        #                 self.remaining_cpu -= np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"]) - nf["cpu_usage"]
+        #                 nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
+        #             elif nf["cpu_usage"] < nf["requested_cpu"] and cpu_change + nf["cpu_usage"] - nf["requested_cpu"] < self.remaining_cpu:
+        #                 self.remaining_cpu -= np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"]) - nf["cpu_usage"] + (nf["cpu_usage"] - nf["requested_cpu"])
+        #                 nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
+        #                 self.remaining_cpu -= cpu_change + nf["cpu_usage"] - nf["requested_cpu"]
+        #         else:
+        #             self.remaining_cpu -= np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"]) - nf["cpu_usage"]
+        #             nf["cpu_usage"] = np.clip(nf["cpu_usage"] + cpu_change, nf["min_cpu"], nf["limited_cpu"])
+                
+        #         mem_change = random.gauss(0, 1.0)
+        #         if mem_change > 0:
+        #             if nf["mem_usage"] > nf["requested_mem"] and mem_change < self.remaining_mem:
+        #                 self.remaining_mem -= np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"]) - nf["mem_usage"]
+        #                 nf["mem_usage"] = np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"])
+        #             elif nf["mem_usage"] < nf["requested_mem"] and mem_change + nf["mem_usage"] - nf["requested_mem"] < self.remaining_mem:
+        #                 self.remaining_mem -= np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"]) - nf["mem_usage"] + (nf["mem_usage"] - nf["requested_mem"])
+        #                 nf["mem_usage"] = np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"])
+        #         else:
+        #             self.remaining_mem -= np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"]) - nf["mem_usage"]
+        #             nf["mem_usage"] = np.clip(nf["mem_usage"] + mem_change, nf["min_mem"], nf["limited_mem"])
+        #     if( not qos_state[slice_idx]["qos_satisfied"]["ext_throughput"] ):
+        #         s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(15.0, 2.0), s["min_bw"], s["allocated_bw"])
+        #     else:
+        #         s["bw_usage"] = np.clip(s["bw_usage"] + random.gauss(0, 10.0), s["min_bw"], s["allocated_bw"])
+
+        #     slice_idx += 1
 
     def apply_delta(self, idx: int, cpu_deltas: np.ndarray, mem_deltas: np.ndarray, delta_bw: float):
         # Apply resource allocation deltas to the specified slice
@@ -800,42 +959,59 @@ class ClusterSimulator():
             for j in range(self.nf_num):
                 nf = s["nfs"][j]
 
-                if cpu_deltas[j] > 0:
-                    if nf["requested_cpu"] >= nf["cpu_usage"] and cpu_deltas[j] < self.total_remaining_cpu:
-                        nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, np.inf)
-                        nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
-                        self.remaining_cpu -= cpu_deltas[j]
-                    elif nf["requested_cpu"] < nf["cpu_usage"] and cpu_deltas[j] + nf["requested_cpu"] - nf["cpu_usage"] < self.total_remaining_cpu:
-                        nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, np.inf)
-                        nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
-                        self.remaining_cpu -= cpu_deltas[j] + nf["requested_cpu"] - nf["cpu_usage"]
-                else:
-                    nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, np.inf)
-                    nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
-                    self.remaining_cpu -= cpu_deltas[j]
+                # update cpu 
+                nf["requested_cpu"] = np.clip(nf["requeste_cpu"] + cpu_deltas, nf["min_cpu"], )
 
-                if mem_deltas[j] > 0:
-                    if nf["requested_mem"] >= nf["mem_usage"] and mem_deltas[j] < self.total_remaining_mem:
-                        nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, np.inf)
-                        nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
-                        self.remaining_mem -= mem_deltas[j]
-                    elif nf["requested_mem"] < nf["mem_usage"] and mem_deltas[j] + nf["requested_mem"] - nf["mem_usage"] < self.total_remaining_mem:
-                        nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, np.inf)
-                        nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
-                        self.remaining_mem -= mem_deltas[j] + nf["requested_mem"] - nf["mem_usage"]
-                else:
-                    nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, np.inf)
-                    nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
-                    self.remaining_mem -= mem_deltas[j]
-            if delta_bw > 0 :
-                if delta_bw <= self.total_remaining_bw:
-                    s["allocated_bw"] = np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw)
-                    self.remaining_bw -= delta_bw
-            else:
-                s["allocated_bw"] = np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw)
-                self.remaining_bw -= delta_bw
+                # update mem
+
+            # update bw
+        
+
+
+
+        # if 0 <= idx < len(self.active_slices):
+        #     s = self.active_slices[idx]
+        #     for j in range(self.nf_num):
+        #         nf = s["nfs"][j]
+
+        #         if cpu_deltas[j] >= 0:
+        #             if nf["requested_cpu"] >= nf["cpu_usage"] and cpu_deltas[j] <= self.remaining_cpu:
+        #                 self.remaining_cpu -= np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu) - nf["requested_cpu"]
+        #                 nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu)
+        #                 nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
+        #             elif nf["requested_cpu"] < nf["cpu_usage"] and cpu_deltas[j] + nf["requested_cpu"] - nf["cpu_usage"] <= self.remaining_cpu:
+        #                 self.remaining_cpu -= np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu) - nf["requested_cpu"] + (nf["requested_cpu"] - nf["cpu_usage"])
+        #                 nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu)
+        #                 nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
+        #         else:
+        #             self.remaining_cpu -= np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu) - nf["requested_cpu"]
+        #             nf["requested_cpu"] = np.clip(nf["requested_cpu"] + cpu_deltas[j], nf["min_cpu"] * 0.8, self.remaining_cpu)
+        #             nf["limited_cpu"] = nf["requested_cpu"] * random.uniform(1.2, 1.5)
+
+        #         if mem_deltas[j] >= 0:
+        #             if nf["requested_mem"] >= nf["mem_usage"] and mem_deltas[j] < self.remaining_mem:
+        #                 self.remaining_mem -= np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem) - nf["requested_mem"]
+        #                 nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem)
+        #                 nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
+        #             elif nf["requested_mem"] < nf["mem_usage"] and mem_deltas[j] + nf["requested_mem"] - nf["mem_usage"] < self.remaining_mem:
+        #                 self.remaining_mem -= np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem) - nf["requested_mem"] + (nf["requested_mem"] - nf["mem_usage"])
+        #                 nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem)
+        #                 nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
+        #         else:
+        #             self.remaining_mem -= np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem) - nf["requested_mem"]
+        #             nf["requested_mem"] = np.clip(nf["requested_mem"] + mem_deltas[j], nf["min_mem"] * 0.8, self.remaining_mem)
+        #             nf["limited_mem"] = nf["requested_mem"] * random.uniform(1.2, 1.5)
+        #     if delta_bw > 0 :
+        #         if delta_bw <= self.remaining_bw:
+        #             self.remaining_bw -= np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw) - s["allocated_bw"] 
+        #             s["allocated_bw"] = np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw)
+        #     else:
+        #         self.remaining_bw -= np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw) - s["allocated_bw"]
+        #         s["allocated_bw"] = np.clip(s["allocated_bw"] + delta_bw, s["min_bw"] * 0.8, self.total_capacity_bw)
     
-
+            # print(f"Applied deltas to slice {idx}: CPU deltas {cpu_deltas}, Mem deltas {mem_deltas}, BW delta {delta_bw}")
+            # print(f"New slice state: {s}")
+            # print(f"Cluster remaining resources: CPU {self.remaining_cpu}, Mem {self.remaining_mem}, BW {self.remaining_bw}")
 
 if __name__ == "__main__":
     env = NetSliceEnv()
@@ -845,7 +1021,7 @@ if __name__ == "__main__":
         action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
-        print(f"Reward: {reward}, Info: {info}")
-        print(f"Observation: {obs}")
+        # print(f"Reward: {reward}, Info: {info}")
+        # print(f"Observation: {obs}")
 
         input("Press Enter to continue...")
