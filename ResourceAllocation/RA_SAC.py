@@ -160,7 +160,7 @@ if __name__ == "__main__":
 
     print(f"Starting training at {timestamp}...")
     
-    model.learn(total_timesteps=10_000, progress_bar=True, callback=TensorboardCallback())
+    model.learn(total_timesteps=40_000, progress_bar=True, callback=TensorboardCallback())
     model.save(f"sac_5g_slice_agent-{timestamp}.zip")
 
     # Quick evaluation
