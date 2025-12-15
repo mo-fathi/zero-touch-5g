@@ -7,8 +7,8 @@ from NSENV import NetSliceEnv
 # --------------------------------------------------------------
 # 1. Load the model (change the filename if you saved it differently)
 # --------------------------------------------------------------
-env = NetSliceEnv(simulate=True)                     # same env class you used for training
-model = SAC.load("sac_5g_slice_agent.zip", env=env)   # or "sac_5g_final" etc.
+env = NetSliceEnv()                     # same env class you used for training
+model = SAC.load("sac_5g_slice_agent-2025-12-14T22-35-30.zip", env=env)   # or "sac_5g_final" etc.
 
 # --------------------------------------------------------------
 # 2. Evaluation loop

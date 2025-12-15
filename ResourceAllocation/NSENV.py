@@ -238,93 +238,177 @@ class NetSliceEnv(gym.Env):
             "mask": mask,
         }
         
+    # def _compute_reward(self):
+    #     reward = 0.0
+        
+    #     # get QoS parameters
+    #     qos = self.simulate_qos(self.simulator.active_slices)
+        
+    #     # total_used_cpu and total_used_mem are sum of max(usage, requested) for each NF
+    #     # total_requested_cpu and total_requested_mem are sum of requested for each NF
+    #     # total_used_bw is sum of used bw for each slice
+    #     # total_allocated_bw is sum of allocated bw for each slice
+    #     total_used_cpu = total_requested_cpu = total_used_mem = total_requested_mem = total_used_bw = total_allocated_bw = 0.0
+
+    #     # Violations and over-allocations
+    #     # TODO using over provisioning parameters in reward
+    #     total_cpu_over = total_mem_over = total_bw_over = 0.0
+
+    #     slice_idx = 0
+    #     for s in self.simulator.active_slices:
+
+    #         for nf in s["nfs"]:
+    #             total_cpu_over += max(0.0, nf["requested_cpu"] - nf["cpu_usage"] )
+    #             total_mem_over += max(0.0, nf["requested_mem"] - nf["mem_usage"] )
+
+    #             total_used_cpu += nf["cpu_usage"]
+    #             total_requested_cpu += nf["requested_cpu"]
+    #             total_used_mem += nf["mem_usage"]
+    #             total_requested_mem += nf["requested_mem"]
+
+    #         total_used_bw += s["bw_usage"]
+    #         total_allocated_bw += s["allocated_bw"]
+
+    #         # Compute Reward/Penalty based on QoS
+    #         qos_ok = all([
+    #                     qos[slice_idx]["qos_satisfied"]["int_latency"],
+    #                     qos[slice_idx]["qos_satisfied"]["int_loss"],
+    #                     qos[slice_idx]["qos_satisfied"]["int_throughput"],
+    #                     qos[slice_idx]["qos_satisfied"]["ext_latency"],
+    #                     qos[slice_idx]["qos_satisfied"]["ext_loss"],
+    #                     qos[slice_idx]["qos_satisfied"]["ext_throughput"]                 
+    #                     ])
+
+    #         total_bw_over += max(0.0, s["allocated_bw"] - s["bw_usage"] )
+
+    #         if qos_ok:
+    #             reward += 200.0
+    #         else:
+    #             # Specific QoS penalties
+    #             if not qos[slice_idx]["qos_satisfied"]["int_latency"]:
+    #                 reward -= 10.0 * (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
+    #             if not qos[slice_idx]["qos_satisfied"]["int_loss"]:
+    #                 reward -= 5.0 * (qos[slice_idx]["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
+    #             if not qos[slice_idx]["qos_satisfied"]["int_throughput"]:
+    #                 reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"]
+    #             if not qos[slice_idx]["qos_satisfied"]["ext_latency"]:
+    #                 reward -= 10.0 * (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
+    #             if not qos[slice_idx]["qos_satisfied"]["ext_loss"]:
+    #                 reward -= 5.0 * (qos[slice_idx]["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
+    #             if not qos[slice_idx]["qos_satisfied"]["ext_throughput"]:
+    #                 reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"]
+
+    #         slice_idx += 1
+
+    #     # Global efficiency bonuses
+    #     # TODO prevent to assign requested < usage
+    #     if total_requested_cpu > 0:
+    #         cpu_util = total_used_cpu / total_requested_cpu
+    #         reward += 20.0 * cpu_util
+    #     if total_requested_mem > 0:
+    #         mem_util = total_used_mem / total_requested_mem
+    #         reward += 10.0 * mem_util
+    #     if total_allocated_bw > 0:
+    #         bw_util = total_used_bw / total_allocated_bw
+    #         reward += 15.0 * bw_util
+
+    #     # Penalties for over-provisioning
+    #     reward -= 0.05 * total_cpu_over
+    #     reward -= 0.02 * total_mem_over
+    #     reward -= 0.04 * total_bw_over
+
+
+    #     # Penalties for cost of allocations
+    #     reward -= 0.03 * max(total_requested_cpu, total_used_cpu)
+    #     reward -= 0.01 * max(total_requested_mem, total_used_mem)
+    #     reward -= 0.02 * total_allocated_bw
+
+    #     return reward
+
     def _compute_reward(self):
         reward = 0.0
+        
         
         # get QoS parameters
         qos = self.simulate_qos(self.simulator.active_slices)
         
-        # total_used_cpu and total_used_mem are sum of max(usage, requested) for each NF
-        # total_requested_cpu and total_requested_mem are sum of requested for each NF
-        # total_used_bw is sum of used bw for each slice
-        # total_allocated_bw is sum of allocated bw for each slice
-        total_used_cpu = total_requested_cpu = total_used_mem = total_requested_mem = total_used_bw = total_allocated_bw = 0.0
-
-        # Violations and over-allocations
-        # TODO using over provisioning parameters in reward
+        
+        # Over-provisioning
+        total_over_provisions = 0.0
+        slice_idx = 0
         total_cpu_over = total_mem_over = total_bw_over = 0.0
+
+        total_cpu_alloc = total_mem_alloc = total_bw_alloc = 0.0
+        
+        # SLA violations
+        sla_viol = 0.0
+
+        viol_int_latency = viol_int_loss = viol_int_throughput = 0.0
+        viol_ext_latency = viol_ext_loss = viol_ext_throughput = 0.0
+
+
 
         slice_idx = 0
         for s in self.simulator.active_slices:
-
             for nf in s["nfs"]:
                 total_cpu_over += max(0.0, nf["requested_cpu"] - nf["cpu_usage"] )
                 total_mem_over += max(0.0, nf["requested_mem"] - nf["mem_usage"] )
 
-                total_used_cpu += min(nf["cpu_usage"], nf["requested_cpu"])
-                total_requested_cpu += nf["requested_cpu"]
-                total_used_mem += min(nf["mem_usage"], nf["requested_mem"])
-                total_requested_mem += nf["requested_mem"]
+                total_cpu_alloc += max(nf["requested_cpu"], nf["cpu_usage"])
+                total_mem_alloc += max(nf["requested_mem"], nf["mem_usage"])
 
-            total_used_bw += s["bw_usage"]
-            total_allocated_bw += s["allocated_bw"]
-
-            # Compute Reward/Penalty based on QoS
-            qos_ok = all([
-                        qos[slice_idx]["qos_satisfied"]["int_latency"],
-                        qos[slice_idx]["qos_satisfied"]["int_loss"],
-                        qos[slice_idx]["qos_satisfied"]["int_throughput"],
-                        qos[slice_idx]["qos_satisfied"]["ext_latency"],
-                        qos[slice_idx]["qos_satisfied"]["ext_loss"],
-                        qos[slice_idx]["qos_satisfied"]["ext_throughput"]                 
-                        ])
 
             total_bw_over += max(0.0, s["allocated_bw"] - s["bw_usage"] )
 
-            if qos_ok:
-                reward += 200.0
-            else:
-                # Specific QoS penalties
-                if not qos[slice_idx]["qos_satisfied"]["int_latency"]:
-                    reward -= 10.0 * (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"] * 1.1) / s["target_int_latency_ms"]
-                if not qos[slice_idx]["qos_satisfied"]["int_loss"]:
-                    reward -= 5.0 * (qos[slice_idx]["int_loss"] - s["target_int_loss"] * 1.1) / s["target_int_loss"]
-                if not qos[slice_idx]["qos_satisfied"]["int_throughput"]:
-                    reward -= 10.0 * (s["target_int_throughput"] * 0.9 - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"]
-                if not qos[slice_idx]["qos_satisfied"]["ext_latency"]:
-                    reward -= 10.0 * (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"] * 1.1) / s["target_ext_latency_ms"]
-                if not qos[slice_idx]["qos_satisfied"]["ext_loss"]:
-                    reward -= 5.0 * (qos[slice_idx]["ext_loss"] - s["target_ext_loss"] * 1.1) / s["target_ext_loss"]
-                if not qos[slice_idx]["qos_satisfied"]["ext_throughput"]:
-                    reward -= 10.0 * (s["target_ext_throughput"] * 0.9 - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"]
+            total_bw_alloc += max(s["allocated_bw"], s["bw_usage"])
+        
+            # SLA Violations
+            viol_int_latency += max(0.0, (qos[slice_idx]["int_latency"] - s["target_int_latency_ms"]) / s["target_int_latency_ms"])
+            viol_int_loss += max(0.0, (qos[slice_idx]["int_loss"] - s["target_int_loss"]) / s["target_int_loss"])
+            viol_int_throughput += max(0.0, (s["target_int_throughput"] - qos[slice_idx]["int_throughput"]) / s["target_int_throughput"])
+            viol_ext_latency += max(0.0, (qos[slice_idx]["ext_latency"] - s["target_ext_latency_ms"]) / s["target_ext_latency_ms"])
+            viol_ext_loss += max(0.0, (qos[slice_idx]["ext_loss"] - s["target_ext_loss"]) / s["target_ext_loss"])
+            viol_ext_throughput += max(0.0, (s["target_ext_throughput"] - qos[slice_idx]["ext_throughput"]) / s["target_ext_throughput"])
 
             slice_idx += 1
 
-        # Global efficiency bonuses
-        # TODO prevent to assign requested < usage
-        if total_requested_cpu > 0:
-            cpu_util = total_used_cpu / total_requested_cpu
-            reward += 20.0 * cpu_util
-        if total_requested_mem > 0:
-            mem_util = total_used_mem / total_requested_mem
-            reward += 10.0 * mem_util
-        if total_allocated_bw > 0:
-            bw_util = total_used_bw / total_allocated_bw
-            reward += 15.0 * bw_util
-
-        # Penalties for over-provisioning
-        reward -= 0.05 * total_cpu_over
-        reward -= 0.02 * total_mem_over
-        reward -= 0.04 * total_bw_over
+        epsilon = 1e-6
 
 
-        # Penalties for cost of allocations
-        reward -= 0.03 * total_requested_cpu
-        reward -= 0.01 * total_requested_mem
-        reward -= 0.02 * total_allocated_bw
+        int_latency_weight = 1.0
+        int_loss_weight = 0.5
+        int_throughput_weight = 1.0
+        ext_latency_weight = 1.0
+        ext_loss_weight = 0.5
+        ext_throughput_weight = 1.0
+
+        sla_viol += (int_latency_weight * viol_int_latency +
+                        int_loss_weight * viol_int_loss +
+                        int_throughput_weight * viol_int_throughput +
+                        ext_latency_weight * viol_ext_latency +
+                        ext_loss_weight * viol_ext_loss +
+                        ext_throughput_weight * viol_ext_throughput)
+
+
+        # Resource Remaining
+        total_remaining_resources = 0.0
+        rem_resorces = self.simulator.get_remaining_resources()
+        total_remaining_resources += (rem_resorces["remaining_cpu"] + rem_resorces["remaining_mem"] + rem_resorces["remaining_bw"])
+
+            
+
+
+        # Reward
+        # reward = total_remaining_resources / (sla_viol + total_over_provisions + epsilon)
+
+        # reward += 5.0 * total_remaining_resources
+        reward -= 300.0 * sla_viol
+        reward -= 0.1 * total_cpu_over
+        reward -= 0.05 * total_mem_over
+        reward -= 0.1 * total_bw_over
+
 
         return reward
-
         
     def _get_info(self):
         pass
@@ -666,9 +750,9 @@ class ClusterSimulator():
 
 
     def __init__(self, max_slices: int = 10, nf_num: int = 8):
-        self.total_capacity_cpu = 200.0      # cores
-        self.total_capacity_mem = 1024.0     # GiB
-        self.total_capacity_bw = 1000.0      # MHz
+        self.total_capacity_cpu = 200.0 * 10     # cores
+        self.total_capacity_mem = 1024.0 * 10    # GiB
+        self.total_capacity_bw = 1000.0  * 10    # MHz
 
         
         # self.remaining_cpu = self.total_capacity_cpu

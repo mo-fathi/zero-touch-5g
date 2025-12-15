@@ -80,7 +80,7 @@ if __name__ == "__main__":
     )
 
     # Load the trained model (replace 'path_to_your_model.zip' with the actual saved model path, e.g., 'sac_5g_slice_agent-2025-12-07T12-34-56.zip')
-    model_path = "sac_5g_slice_agent-2025-12-07T03-36-22.zip"  # <-- Replace this with your actual model file path
+    model_path = "sac_5g_slice_agent-2025-12-14T22-35-30.zip"  # <-- Replace this with your actual model file path
     model = SAC.load(model_path, env=env)
 
     # Test the model for one episode (up to 1000 steps)
