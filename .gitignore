@@ -5,3 +5,4 @@ ResourceAllocation/__pycache__/
 ResourceAllocation/*.png
 AddmissionControl/__pycache__/
 AddmissionControl/*.png
+AddmissionControl/*.pth

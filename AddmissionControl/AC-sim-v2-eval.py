@@ -125,6 +125,7 @@ class AdmissionEnv(gym.Env):
             next_state = np.concatenate((nsr_feat, res_feat, [avg_rev, avg_T0], avg_QoS))
         return next_state, reward, self.done, False, {}
 
+
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
@@ -136,6 +137,7 @@ class DQN(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
+
 
 class DQNAgent:
     def __init__(self, state_size, action_size):
@@ -181,6 +183,7 @@ class DQNAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
+
 class GreedyAgent:
     def __init__(self):
         pass
@@ -213,47 +216,32 @@ if __name__ == "__main__":
     env = AdmissionEnv(queue_length=20, arrival_rate=0.1)
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
+    
+    # Load the saved DQN agent
     dqn_agent = DQNAgent(state_size, action_size)
-    episodes = 500  # Train fewer for demo
-    batch_size = 32
-    training_rewards = []
-    for e in range(episodes):
-        state, _ = env.reset()
-        total_reward = 0
-        done = False
-        while not done:
-            action = dqn_agent.act(state)
-            next_state, reward, done, _, _ = env.step(action)
-            dqn_agent.remember(state, action, reward, next_state, done)
-            state = next_state
-            total_reward += reward
-            if len(dqn_agent.memory) > batch_size:
-                dqn_agent.replay(batch_size)
-        training_rewards.append(total_reward)
-        if (e + 1) % 100 == 0:
-            print(f"Training Episode: {e+1}/{episodes}, Total Reward: {total_reward:.2f}, Epsilon: {dqn_agent.epsilon:.2f}")
-
-    torch.save(dqn_agent.model.state_dict(), 'dqn_agent.pth')
-    print("DQN agent saved to 'dqn_agent.pth'")
-
-    # # Evaluate DQN
-    # dqn_rewards = evaluate_agent(env, dqn_agent, num_episodes=100, is_dqn=True)
-
-    # # Evaluate Greedy
-    # greedy_agent = GreedyAgent()
-    # greedy_rewards = evaluate_agent(env, greedy_agent, num_episodes=100, is_dqn=False)
-
-    # # Plot comparison
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(dqn_rewards, label='DQN Agent', alpha=0.7)
-    # plt.plot(greedy_rewards, label='Greedy Agent', alpha=0.7)
-    # plt.xlabel('Test Episode')
-    # plt.ylabel('Total Reward')
-    # plt.title('Comparison of DQN vs Greedy Agent over 100 Test Episodes')
-    # plt.legend()
-    # plt.grid(True)
-    # plt.savefig('dqn_vs_greedy_comparison.png')
-
-    # # Also compute averages
-    # print(f"Average DQN Reward: {np.mean(dqn_rewards):.2f}")
-    # print(f"Average Greedy Reward: {np.mean(greedy_rewards):.2f}")
+    dqn_agent.model.load_state_dict(torch.load('dqn_agent.pth'))
+    dqn_agent.model.eval()  # Set to evaluation mode (disables dropout if any, though not used here)
+    print("Loaded saved DQN agent from 'dqn_agent.pth'")
+    
+    # Evaluate DQN (100 test episodes)
+    dqn_rewards = evaluate_agent(env, dqn_agent, num_episodes=100, is_dqn=True)
+    
+    # Evaluate Greedy (same 100 test episodes with identical seeds)
+    greedy_agent = GreedyAgent()
+    greedy_rewards = evaluate_agent(env, greedy_agent, num_episodes=100, is_dqn=False)
+    
+    # Plot comparison
+    plt.figure(figsize=(10, 6))
+    plt.plot(dqn_rewards, label='DQN Agent', alpha=0.7)
+    plt.plot(greedy_rewards, label='Greedy Agent', alpha=0.7)
+    plt.xlabel('Test Episode')
+    plt.ylabel('Total Reward')
+    plt.title('Comparison of Loaded DQN vs Greedy Agent over 100 Test Episodes')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig('evaluation_comparison.png')  # Save the plot to a file
+    plt.show()
+    
+    # Print average rewards
+    print(f"Average DQN Reward: {np.mean(dqn_rewards):.2f}")
+    print(f"Average Greedy Reward: {np.mean(greedy_rewards):.2f}")
