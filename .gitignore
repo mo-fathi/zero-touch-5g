@@ -6,3 +6,6 @@ ResourceAllocation/*.png
 AddmissionControl/__pycache__/
 AddmissionControl/*.png
 AddmissionControl/*.pth
+AddmissionControl/v2-simulation/__pycache__/
+AddmissionControl/v2-simulation/graphs/*.png
+AddmissionControl/v2-simulation/models/*.pth

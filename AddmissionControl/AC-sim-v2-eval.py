@@ -5,16 +5,19 @@ import random
 from collections import deque
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 import heapq
 import matplotlib.pyplot as plt
+
+# ==================== AdmissionEnv ==================== 
+# (Paste the full AdmissionEnv class here - exactly as in your previous code)
+# Make sure it includes the _dequeue_next, generate_nsr, etc.
 
 class AdmissionEnv(gym.Env):
     def __init__(self, queue_length=10, total_resources={'cpu': 1000.0, 'mem': 10000.0, 'bw': 10000.0}, penalty=-10.0, reject_penalty=-0.1, arrival_rate=1.0):
         super(AdmissionEnv, self).__init__()
         self.queue_length = queue_length
-        self.total_resources = total_resources
+        self.total_resources = {k: float(v) for k, v in total_resources.items()}  # Ensure float
         self.penalty = penalty
         self.reject_penalty = reject_penalty
         self.arrival_rate = arrival_rate
@@ -30,34 +33,34 @@ class AdmissionEnv(gym.Env):
         P_max_ext = random.uniform(0.001, 0.05)
         T0 = random.uniform(10, 500)
         revenue = random.uniform(5, 100)
-        # Compute resource requirements based on QoS (arbitrary but reasonable mappings)
         bw_req = Phi_min_int + Phi_min_ext
-        cpu_req = 100 / L_max_int + 100 / L_max_ext  # More CPU for stricter (lower) latency
-        mem_req = 100 / P_max_int + 100 / P_max_ext  # More memory for stricter (lower) packet loss
+        cpu_req = 100 / L_max_int + 100 / L_max_ext
+        mem_req = 100 / P_max_int + 100 / P_max_ext
         resources = {'cpu': cpu_req, 'mem': mem_req, 'bw': bw_req}
         QoS = {
-            "L_max_int": L_max_int,
-            "L_max_ext": L_max_ext,
-            "Phi_min_int": Phi_min_int,
-            "Phi_min_ext": Phi_min_ext,
-            "P_max_int": P_max_int,
-            "P_max_ext": P_max_ext
+            "L_max_int": L_max_int, "L_max_ext": L_max_ext,
+            "Phi_min_int": Phi_min_int, "Phi_min_ext": Phi_min_ext,
+            "P_max_int": P_max_int, "P_max_ext": P_max_ext
         }
         return {"QoS": QoS, "T0": T0, "revenue": revenue, "resources": resources}
 
     def get_nsr_features(self, nsr):
         q = nsr['QoS']
-        return np.array([q['L_max_int'], q['L_max_ext'], q['Phi_min_int'], q['Phi_min_ext'], q['P_max_int'], q['P_max_ext'], nsr['T0'], nsr['revenue']], dtype=np.float32)
+        return np.array([q['L_max_int'], q['L_max_ext'], q['Phi_min_int'], q['Phi_min_ext'],
+                         q['P_max_int'], q['P_max_ext'], nsr['T0'], nsr['revenue']], dtype=np.float32)
 
     def get_remaining_res(self):
-        return np.array([self.remaining_resources['cpu'], self.remaining_resources['mem'], self.remaining_resources['bw']], dtype=np.float32)
+        return np.array([self.remaining_resources['cpu'], self.remaining_resources['mem'],
+                         self.remaining_resources['bw']], dtype=np.float32)
 
     def get_avg_queue(self):
         if len(self.queue) == 0:
             return 0.0, 0.0, np.zeros(6, dtype=np.float32)
         revs = [nsr['revenue'] for nsr in self.queue]
         T0s = [nsr['T0'] for nsr in self.queue]
-        QoSs = np.array([[nsr['QoS'][k] for k in ['L_max_int', 'L_max_ext', 'Phi_min_int', 'Phi_min_ext', 'P_max_int', 'P_max_ext']] for nsr in self.queue], dtype=np.float32)
+        QoSs = np.array([[nsr['QoS'][k] for k in ['L_max_int', 'L_max_ext', 'Phi_min_int',
+                                                 'Phi_min_ext', 'P_max_int', 'P_max_ext']]
+                         for nsr in self.queue], dtype=np.float32)
         return np.mean(revs), np.mean(T0s), np.mean(QoSs, axis=0)
 
     def _dequeue_next(self):
@@ -100,6 +103,7 @@ class AdmissionEnv(gym.Env):
 
     def step(self, action):
         reward = 0.0
+        revenue_gained = 0.0
         if action == 0:  # Reject
             reward = self.reject_penalty
         else:  # Accept
@@ -109,11 +113,11 @@ class AdmissionEnv(gym.Env):
                 for k in ['cpu', 'mem', 'bw']:
                     self.remaining_resources[k] -= req[k]
                 reward = self.current_nsr['revenue'] / self.current_nsr['T0']
+                revenue_gained = self.current_nsr['revenue']
                 release_time = self.current_time + self.current_nsr['T0']
                 heapq.heappush(self.release_heap, (release_time, self.current_nsr['resources'].copy()))
             else:
                 reward = self.penalty
-        # Dequeue next NSR
         self.current_nsr = self._dequeue_next()
         if self.current_nsr is None:
             self.done = True
@@ -123,9 +127,9 @@ class AdmissionEnv(gym.Env):
             nsr_feat = self.get_nsr_features(self.current_nsr)
             res_feat = self.get_remaining_res()
             next_state = np.concatenate((nsr_feat, res_feat, [avg_rev, avg_T0], avg_QoS))
-        return next_state, reward, self.done, False, {}
+        return next_state, reward, self.done, False, {"revenue_gained": revenue_gained}
 
-
+# ==================== DQN Model ====================
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
@@ -138,110 +142,149 @@ class DQN(nn.Module):
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
-
+# ==================== Agents ====================
 class DQNAgent:
     def __init__(self, state_size, action_size):
-        self.state_size = state_size
-        self.action_size = action_size
-        self.memory = deque(maxlen=2000)
-        self.gamma = 0.95
-        self.epsilon = 1.0
-        self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995
-        self.learning_rate = 0.001
         self.model = DQN(state_size, action_size)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        self.criterion = nn.MSELoss()
 
-    def remember(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-
-    def act(self, state, epsilon=None):
-        if epsilon is None:
-            epsilon = self.epsilon
+    def act(self, state, epsilon=0.0):
         if np.random.rand() <= epsilon:
-            return random.randrange(self.action_size)
+            return random.randrange(2)
         state = torch.from_numpy(state).float().unsqueeze(0)
-        act_values = self.model(state)
+        with torch.no_grad():
+            act_values = self.model(state)
         return np.argmax(act_values.cpu().data.numpy())
 
-    def replay(self, batch_size):
-        minibatch = random.sample(self.memory, batch_size)
-        for state, action, reward, next_state, done in minibatch:
-            state = torch.from_numpy(state).float().unsqueeze(0)
-            next_state = torch.from_numpy(next_state).float().unsqueeze(0)
-            output = self.model(state)
-            with torch.no_grad():
-                next_q = self.model(next_state)
-            target_value = reward if done else (reward + self.gamma * torch.max(next_q).item())
-            target = output.clone()
-            target[0][action] = target_value
-            self.optimizer.zero_grad()
-            loss = self.criterion(output, target)
-            loss.backward()
-            self.optimizer.step()
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-
-
 class GreedyAgent:
-    def __init__(self):
-        pass
-
     def act(self, state):
-        # Greedy: accept if possible (action 1), else reject (0)
-        # But since we don't have direct access to resources in act, assume greedy accepts always if resources allow, but in env step it checks.
-        # For greedy, we can always choose action 1 (accept), and let env handle if not enough resources.
         return 1  # Always try to accept
 
+# ==================== Evaluation Function ====================
 def evaluate_agent(env, agent, num_episodes=100, is_dqn=True):
-    rewards = []
+    total_rewards = []
+    total_revenues = []
+    avg_utilizations = []  # List of (cpu%, mem%, bw%) averages per episode
+
     for e in range(num_episodes):
-        seed = e  # Use episode number as seed for reproducibility
+        seed = 1000 + e  # Different from training seeds for fair testing
         state, _ = env.reset(seed=seed)
-        total_reward = 0
+        episode_reward = 0.0
+        episode_revenue = 0.0
+        utilization_history = []  # List of utilization at each step
+
         done = False
         while not done:
-            if is_dqn:
-                action = agent.act(state, epsilon=0.0)  # No exploration, pure policy
-            else:
-                action = agent.act(state)
-            next_state, reward, done, _, _ = env.step(action)
-            state = next_state
-            total_reward += reward
-        rewards.append(total_reward)
-    return rewards
+            action = agent.act(state, epsilon=0.0) if is_dqn else agent.act(state)
+            next_state, reward, done, _, info = env.step(action)
+            episode_reward += reward
+            episode_revenue += info.get("revenue_gained", 0.0)
 
+            # Compute current utilization
+            used = {
+                'cpu': env.total_resources['cpu'] - env.remaining_resources['cpu'],
+                'mem': env.total_resources['mem'] - env.remaining_resources['mem'],
+                'bw': env.total_resources['bw'] - env.remaining_resources['bw']
+            }
+            util = {
+                'cpu': used['cpu'] / env.total_resources['cpu'] * 100,
+                'mem': used['mem'] / env.total_resources['mem'] * 100,
+                'bw': used['bw'] / env.total_resources['bw'] * 100
+            }
+            utilization_history.append((util['cpu'], util['mem'], util['bw']))
+
+            state = next_state
+
+        total_rewards.append(episode_reward)
+        total_revenues.append(episode_revenue)
+        if utilization_history:
+            avg_util = np.mean(utilization_history, axis=0)
+            avg_utilizations.append(avg_util)
+        else:
+            avg_utilizations.append((0, 0, 0))
+
+    return total_rewards, total_revenues, avg_utilizations
+
+# ==================== Main Evaluation ====================
 if __name__ == "__main__":
     env = AdmissionEnv(queue_length=20, arrival_rate=0.1)
+
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
-    
-    # Load the saved DQN agent
+
+    # Load trained DQN agent
     dqn_agent = DQNAgent(state_size, action_size)
-    dqn_agent.model.load_state_dict(torch.load('dqn_agent.pth'))
-    dqn_agent.model.eval()  # Set to evaluation mode (disables dropout if any, though not used here)
-    print("Loaded saved DQN agent from 'dqn_agent.pth'")
-    
-    # Evaluate DQN (100 test episodes)
-    dqn_rewards = evaluate_agent(env, dqn_agent, num_episodes=100, is_dqn=True)
-    
-    # Evaluate Greedy (same 100 test episodes with identical seeds)
+    try:
+        dqn_agent.model.load_state_dict(torch.load('dqn_agent.pth'))
+        dqn_agent.model.eval()
+        print("Successfully loaded 'dqn_agent.pth'")
+    except FileNotFoundError:
+        print("Error: 'dqn_agent.pth' not found. Train the agent first!")
+        exit(1)
+
     greedy_agent = GreedyAgent()
-    greedy_rewards = evaluate_agent(env, greedy_agent, num_episodes=100, is_dqn=False)
-    
-    # Plot comparison
-    plt.figure(figsize=(10, 6))
-    plt.plot(dqn_rewards, label='DQN Agent', alpha=0.7)
-    plt.plot(greedy_rewards, label='Greedy Agent', alpha=0.7)
-    plt.xlabel('Test Episode')
-    plt.ylabel('Total Reward')
-    plt.title('Comparison of Loaded DQN vs Greedy Agent over 100 Test Episodes')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('evaluation_comparison.png')  # Save the plot to a file
-    plt.show()
-    
-    # Print average rewards
-    print(f"Average DQN Reward: {np.mean(dqn_rewards):.2f}")
-    print(f"Average Greedy Reward: {np.mean(greedy_rewards):.2f}")
+
+    print("Evaluating agents over 100 test episodes...")
+    dqn_rewards, dqn_revenues, dqn_utils = evaluate_agent(env, dqn_agent, num_episodes=100, is_dqn=True)
+    greedy_rewards, greedy_revenues, greedy_utils = evaluate_agent(env, greedy_agent, num_episodes=100, is_dqn=False)
+
+    # Convert utilizations to arrays for easier plotting
+    dqn_utils = np.array(dqn_utils)  # (100, 3)
+    greedy_utils = np.array(greedy_utils)
+
+    # =============== Plotting ===============
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+
+    # 1. Total Reward
+    axs[0, 0].plot(dqn_rewards, label='DQN', alpha=0.8)
+    axs[0, 0].plot(greedy_rewards, label='Greedy', alpha=0.8)
+    axs[0, 0].set_title('Total Reward per Episode')
+    axs[0, 0].set_xlabel('Test Episode')
+    axs[0, 0].set_ylabel('Reward')
+    axs[0, 0].legend()
+    axs[0, 0].grid(True)
+
+    # 2. Cumulative Revenue
+    axs[0, 1].plot(dqn_revenues, label='DQN', alpha=0.8)
+    axs[0, 1].plot(greedy_revenues, label='Greedy', alpha=0.8)
+    axs[0, 1].set_title('Total Revenue Achieved per Episode')
+    axs[0, 1].set_xlabel('Test Episode')
+    axs[0, 1].set_ylabel('Revenue')
+    axs[0, 1].legend()
+    axs[0, 1].grid(True)
+
+    # 3. Average Resource Utilization (stacked or separate lines)
+    resources = ['CPU', 'Memory', 'Bandwidth']
+    for i, res in enumerate(resources):
+        axs[1, 0].plot(dqn_utils[:, i], label=f'DQN {res}' if i == 0 else None, linestyle='-', alpha=0.7)
+        axs[1, 0].plot(greedy_utils[:, i], label=f'Greedy {res}' if i == 0 else None, linestyle='--', alpha=0.7)
+    axs[1, 0].set_title('Average Resource Utilization (%) per Episode')
+    axs[1, 0].set_xlabel('Test Episode')
+    axs[1, 0].set_ylabel('Utilization (%)')
+    axs[1, 0].legend()
+    axs[1, 0].grid(True)
+
+    # 4. Box plot summary of utilization
+    data = [dqn_utils.mean(axis=0), greedy_utils.mean(axis=0)]
+    labels = ['DQN', 'Greedy']
+    x = np.arange(len(labels))
+    width = 0.25
+    for i in range(3):
+        offset = i * width - width
+        axs[1, 1].bar(x + offset, [data[0][i], data[1][i]], width, label=resources[i])
+    axs[1, 1].set_title('Mean Resource Utilization Across All Episodes')
+    axs[1, 1].set_ylabel('Utilization (%)')
+    axs[1, 1].set_xticks(x)
+    axs[1, 1].set_xticklabels(labels)
+    axs[1, 1].legend()
+    axs[1, 1].grid(True, axis='y')
+
+    plt.tight_layout()
+    plt.savefig('dqn_vs_greedy_evaluation.png', dpi=200)
+    # plt.show()
+
+    # Print summary
+    print("\n=== Summary ===")
+    print(f"DQN    - Avg Reward: {np.mean(dqn_rewards):.2f}, Avg Revenue: {np.mean(dqn_revenues):.2f}")
+    print(f"Greedy - Avg Reward: {np.mean(greedy_rewards):.2f}, Avg Revenue: {np.mean(greedy_revenues):.2f}")
+    print(f"DQN    - Avg Util: CPU {dqn_utils.mean(axis=0)[0]:.1f}%, Mem {dqn_utils.mean(axis=0)[1]:.1f}%, BW {dqn_utils.mean(axis=0)[2]:.1f}%")
+    print(f"Greedy - Avg Util: CPU {greedy_utils.mean(axis=0)[0]:.1f}%, Mem {greedy_utils.mean(axis=0)[1]:.1f}%, BW {greedy_utils.mean(axis=0)[2]:.1f}%")
